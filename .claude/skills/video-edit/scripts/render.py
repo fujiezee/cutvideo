@@ -212,11 +212,23 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
         vf.append("reverse")
     if speed != 1.0:
         vf.append(f"setpts=PTS/{speed}")
-    fchain, _ = fit_chain(fit, W, H, focus, ctx["bg"])
-    vf.append(fchain)
-    vf.append(f"fps={fps}")
-    efx_v, efx_a = effect_filters(effects, W, H, dur, fps)
-    vf += efx_v
+    geom = names & {"zoom_in", "zoom_out", "ken_burns", "punch", "shake"}
+    if fit == "pad" and kind != "color" and geom:
+        # letterboxed: move/zoom the picture inside the frame, keep the bars static
+        si = ctx["probe"](clip["path"])
+        k = min(W / si["width"], H / si["height"])
+        cw, ch = int(si["width"] * k) // 2 * 2, int(si["height"] * k) // 2 * 2
+        vf.append(f"scale={cw}:{ch}:flags=lanczos")
+        vf.append(f"fps={fps}")
+        efx_v, efx_a = effect_filters(effects, cw, ch, dur, fps)
+        vf += efx_v
+        vf.append(f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={ctx['bg']}")
+    else:
+        fchain, _ = fit_chain(fit, W, H, focus, ctx["bg"])
+        vf.append(fchain)
+        vf.append(f"fps={fps}")
+        efx_v, efx_a = effect_filters(effects, W, H, dur, fps)
+        vf += efx_v
     if grade and grade != "none":
         if str(grade).startswith("lut:"):
             vf.append(f"lut3d='{grade[4:]}'")
@@ -321,13 +333,42 @@ def text_len(s: str) -> float:
     return sum(1 if is_cjk(ch) else 0.55 for ch in s)
 
 
+def anchor_to_clip(item: dict, timeline: list[dict]) -> dict | None:
+    """Resolve a text/caption whose timing is given relative to a clip.
+
+    {"clip": i, "start": 0.5, "end": 2.0}          -> seconds from that clip's start (end defaults to clip end)
+    {"clip": i, "src_start": 316.2, "src_end": 320} -> source-video seconds inside that clip (follows speed)
+    `clip` may be negative (-1 = last clip). Items without `clip` are returned unchanged.
+    """
+    if "clip" not in item:
+        return item
+    try:
+        seg = timeline[int(item["clip"])]
+    except IndexError:
+        raise SystemExit(f"text/caption refers to clip {item['clip']} but the EDL has {len(timeline)} clips")
+    it = {k: v for k, v in item.items() if k not in ("clip", "src_start", "src_end")}
+    a = seg["out_start"]
+    va, vb = seg.get("vis_start", a), seg.get("vis_end", seg["out_end"])
+    if "src_start" in item:
+        sp, src_in = seg["speed"], seg["src_in"]
+        it["start"] = a + (float(item["src_start"]) - src_in) / sp
+        it["end"] = a + (float(item.get("src_end", seg["src_out"])) - src_in) / sp
+        it["start"], it["end"] = max(it["start"], va), min(it["end"], vb)  # not across transitions
+    else:
+        it["start"] = a + float(item.get("start", 0))
+        it["end"] = a + float(item["end"]) if "end" in item else vb
+    return it if it["end"] - it["start"] > 0.05 else None
+
+
 def build_subtitles(edl: dict, timeline: list[dict], analysis: dict | None) -> list[dict]:
     sub = edl.get("subtitles") or {}
     if not sub or sub.get("enabled") is False:
         return []
     items = []
-    for it in sub.get("items", []):  # manual captions on output timeline
-        items.append({**it, "style": it.get("style", sub.get("style", "caption"))})
+    for it in sub.get("items", []):  # manual captions (output time, or anchored to a clip)
+        it = anchor_to_clip(it, timeline)
+        if it:
+            items.append({**it, "style": it.get("style", sub.get("style", "caption"))})
     if not analysis or sub.get("from", "transcript") != "transcript":
         return items
     max_chars = float(sub.get("max_chars", 14))
@@ -477,10 +518,18 @@ def main():
         timeline.append({"clip": c, "out_start": round(start, 3), "out_end": round(start + r["duration"], 3),
                          "src_in": src_in, "src_out": src_in + (r["duration"] * sp), "speed": sp})
     total = acc
+    # visible span of each clip: transitions are split at their midpoint
+    for i, t in enumerate(timeline):
+        prev = timeline[i - 1] if i else None
+        nxt = timeline[i + 1] if i + 1 < len(timeline) else None
+        t["vis_start"] = round((prev["out_end"] + t["out_start"]) / 2, 3) if prev and prev["out_end"] > t["out_start"] \
+            else t["out_start"]
+        t["vis_end"] = round((t["out_end"] + nxt["out_start"]) / 2, 3) if nxt and t["out_end"] > nxt["out_start"] \
+            else t["out_end"]
 
     # 3) overlay layer (texts + subtitles + images)
     subs = build_subtitles(edl, timeline, analysis)
-    texts = list(edl.get("texts", [])) + subs
+    texts = [t for t in (anchor_to_clip(x, timeline) for x in edl.get("texts", [])) if t] + subs
     images = []
     for im in edl.get("images", []):
         images.append({**im, "path": resolve_src(im["path"], None, base)})

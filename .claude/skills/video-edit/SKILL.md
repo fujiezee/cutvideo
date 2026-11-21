@@ -134,6 +134,9 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   transitions ≤ 0.5 s and shorter than both neighbouring clips.
 - Captions come from the transcript and follow cuts and speed changes automatically; muted or
   reversed clips get none. Manual captions: `subtitles.items`.
+- Prefer anchoring texts and manual captions to clips (`"clip": i` with `start`/`end`, or
+  `src_start`/`src_end` in source seconds) over absolute output times: they stay correct
+  when clips are trimmed, reordered or transitions change.
 - `beat_sync` rewrites clip `out` points to land cuts on beats; set `every: 2` or `4` for
   slower pacing.
 - This ffmpeg build may lack `drawtext`/`libass`; all text is drawn by Pillow, so any font

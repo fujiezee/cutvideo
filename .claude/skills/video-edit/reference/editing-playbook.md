@@ -20,7 +20,7 @@ Pick the recipe that matches the footage and the ask, then adapt it. Rules of th
 2. Establishing shot (wide, `zoom_in` 0.06-0.1) at each new location, with a
    `lower_third` naming the place.
 3. Shot lengths 1.5-4 s for B-roll, longer for speaking moments; vary them.
-4. Mostly hard cuts; `fade`/`dissolve` for a change of time or place; `fadeblack` at the end.
+4. Mostly hard cuts; `fade` for a change of time or place; `fadeblack` at the end.
 5. Grade `warm`, `film` or `teal_orange`; music bed at 0.25-0.4 under speech, louder in
    music-only sections (split into several `music` items if needed).
 

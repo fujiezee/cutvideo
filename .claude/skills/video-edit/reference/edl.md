@@ -51,7 +51,7 @@ Generated clips:
 
 ## Transitions
 
-`cut` (default), `fade`, `fadeblack`, `fadewhite`, `dissolve`, `wipeleft/right/up/down`,
+`cut` (default), `fade`, `fadeblack`, `fadewhite`, `dissolve` (noisy pixel dissolve, not a crossfade), `wipeleft/right/up/down`,
 `slideleft/right/up/down`, `smoothleft/right/up/down`, `circleopen`, `circleclose`,
 `circlecrop`, `rectcrop`, `radial`, `zoomin`, `pixelize`, `hblur`, `distance`, `squeezeh`,
 `squeezev`, `coverleft/right`, `revealleft/right`, `diagtl`, `diagbr`, `hlslice`, `hrslice`,
@@ -63,7 +63,7 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
 
 | type | params | look |
 |---|---|---|
-| `zoom_in` / `zoom_out` | `amount` 0.12, `focus` [x,y] | slow Ken Burns push / pull |
+| `zoom_in` / `zoom_out` | `amount` 0.12, `focus` [x,y] | slow Ken Burns push / pull (with `fit: pad` the picture moves inside static bars) |
 | `punch` | `scale` 1.18, `focus`, optional `start`,`end` (clip seconds) | instant punch-in (hides jump cuts, emphasis) |
 | `shake` | `amount` 0.03, `start`, `end` | camera shake (impact, bass hit) |
 | `flash` | `duration` 0.25 | white flash at clip start |
@@ -93,6 +93,19 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
 Times are output-timeline seconds (see the timeline printed by render.py). Only `text`,
 `start`, `end` are required; `style` supplies the rest.
 
+Anchor to a clip instead, so timings survive re-cutting (works for `texts` and
+`subtitles.items`; `clip` is the index in `clips`, negative counts from the end):
+
+```json
+{"text": "40 years later", "clip": 6, "start": 0.3, "end": 3.0}
+{"text": "We have to follow our passions", "clip": 2, "src_start": 318.1, "src_end": 320.06}
+```
+
+`start`/`end` with `clip` are seconds from that clip's start (`end` defaults to the clip's
+end). `src_start`/`src_end` are source-video seconds (e.g. word timings from the
+transcript), mapped through the clip's `in` and `speed` and clamped to the part of the clip
+that is visible (up to the midpoint of its transitions).
+
 - `style`: `caption`, `title`, `subtitle`, `highlight`, `lower_third`, `label`, `tag`, `quote`.
 - `pos`: `center`, `top`, `bottom`, `left`, `right`, `top_left`, `top_right`, `bottom_left`,
   `bottom_right`, `lower_left`, `center_low`, `center_high`, `caption`, or `[x, y]` (0..1).
@@ -108,6 +121,8 @@ Times are output-timeline seconds (see the timeline printed by render.py). Only 
  "items": [{"text": "manual caption", "start": 1.0, "end": 2.5}]}
 ```
 
+Use `"from": "manual"` to skip the transcript and caption only `items` (handy when the
+ASR is unreliable, e.g. dialogue under loud music, or for translated captions).
 Transcript words are mapped through every clip's `in/out/speed` onto the output timeline.
 `max_chars`: about 12-16 for 9:16, 20-26 for 16:9 (CJK chars; Latin counts ~0.55 each).
 `replace` fixes ASR mistakes. An `.srt` is written next to the output.
