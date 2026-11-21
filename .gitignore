@@ -1,0 +1,7 @@
+# edit jobs: footage, renders, caches
+edits/
+.render/
+.worktree/
+__pycache__/
+*.pyc
+.DS_Store
