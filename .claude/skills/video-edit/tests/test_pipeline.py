@@ -89,3 +89,25 @@ def test_intro_past_clip_end_freezes_last_frame(job):
                       "effects": [{"type": "intro", "at": 1.0, "hold": 1.0, "name": "A", "box": [0, 0, 1, 1]}]}]}
     rep = render(edl, job, "edl_intro", "--draft")
     assert probe(rep["output"])["dur"] > 1.5
+
+
+def test_narration_is_spoken_captioned_and_ducks_music(job):
+    import pytest
+    from tts import backend
+    if not backend():
+        pytest.skip("no text-to-speech backend")
+    music = job / "src" / "music.wav"
+    run("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-t", "8", "-i", "sine=frequency=220:sample_rate=48000",
+        "-af", "volume=0.5", music)
+    edl = {"analysis": "work/analysis.json",
+           "output": {"path": "out/vo.mp4", "width": 320, "height": 180, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 0.2, "out": 2.8, "volume": 0.1}, {"src": "v1", "in": 3.2, "out": 5.8,
+                                                                         "volume": 0.1}],
+           "music": [{"path": "src/music.wav", "volume": 0.5, "duck": True, "loop": False}],
+           "narration": {"items": [{"text": "Hello there, this is a test.", "clip": 0, "start": 0.3}]}}
+    rep = render(edl, job, "edl_vo", "--draft")
+    subs = json.loads((job / ".render" / "subtitles.json").read_text())
+    assert subs and subs[0]["start"] >= 0.29
+    graph = (job / ".render" / "graph.txt").read_text()
+    assert "sidechaincompress" in graph and "[ns0]" in graph
+    assert probe(rep["output"])["dur"] > 4.5

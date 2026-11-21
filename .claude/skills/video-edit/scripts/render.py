@@ -220,6 +220,32 @@ def auto_focus(clip: dict, W: int, H: int, ctx: dict) -> list[float]:
     return [round(frac(cx, iw, W), 3), round(frac(cy, ih, H, 0.12), 3)]
 
 
+def prepare_narration(edl: dict, work: Path):
+    """Voice-over: synthesise every narration line (tts.py), and add its captions.
+
+    "narration": {"voice": "Tingting", "rate": 190, "volume": 1.0, "captions": true,
+                  "items": [{"text": "...", "clip": 2, "start": 0.2} | {"text": "...", "at": 5.0}]}
+    Lines are mixed like dialogue: music tracks with `duck` dip under them."""
+    nar = edl.get("narration")
+    if not nar or not nar.get("items"):
+        return
+    from tts import caption_chunks, synth
+    sub = edl.setdefault("subtitles", {"enabled": True, "from": "manual"})
+    if sub.get("enabled") is False and nar.get("captions", True):
+        sub.update({"enabled": True, "from": "manual"})
+    for it in nar["items"]:
+        path, dur = synth(it["text"], work / "tts", it.get("voice", nar.get("voice")),
+                          it.get("rate", nar.get("rate")))
+        it["_path"], it["_dur"] = str(path), dur
+        if nar.get("captions", True):
+            t0 = float(it.get("start", it.get("at", 0)))
+            for text, a, b in caption_chunks(it["text"], dur):
+                cap = {"text": text, "start": round(t0 + a, 3), "end": round(t0 + b, 3)}
+                if "clip" in it:
+                    cap["clip"] = it["clip"]
+                sub.setdefault("items", []).append(cap)
+
+
 def snap_intros_to_pauses(edl: dict, analysis: dict | None, reach: float = 0.8, min_gap: float = 0.12):
     """Move a freeze-frame intro out of the middle of a word: the audio pauses during the
     freeze, so freezing mid-speech chops a word. Uses transcript word timings; `"snap": false`
@@ -893,6 +919,7 @@ def main():
         if not snd.get("sfx"):
             snd["path"] = resolve_src(snd.get("src") or snd["path"], analysis, base)
 
+    prepare_narration(edl, work)
     snap_intros_to_pauses(edl, analysis)
     apply_beat_sync(edl, analysis, base)
     apply_pins(edl)
@@ -1035,6 +1062,23 @@ def main():
         else:
             parts.append(f"[{vin}:a]{','.join(chain)}[ca{i}]")
         clip_tracks.append(f"[ca{i}]")
+        vin += 1
+
+    for k, it in enumerate((edl.get("narration") or {}).get("items", [])):
+        at = (timeline[int(it["clip"])]["out_start"] + float(it.get("start", 0))) if "clip" in it \
+            else float(it.get("at", 0))
+        if at >= total:
+            continue
+        ms = int(round(at * 1000))
+        vol = float(it.get("volume", edl["narration"].get("volume", 1.0)))
+        inputs += ["-i", it["_path"]]
+        chain = f"[{vin}:a]aresample=48000,aformat=channel_layouts=stereo,volume={vol},adelay={ms}|{ms}"
+        if ducking:
+            parts.append(f"{chain},asplit=2[na{k}][ns{k}]")
+            side_tracks.append(f"[ns{k}]")
+        else:
+            parts.append(f"{chain}[na{k}]")
+        clip_tracks.append(f"[na{k}]")
         vin += 1
 
     def bus(tracks, label):

@@ -1,6 +1,6 @@
 ---
 name: video-edit
-description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "全剪", "多种风格", "edit this video", "make a montage", "make a trailer", "cut this down".
+description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, face recognition of the cast, narrated recaps with text-to-speech, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "全剪", "多种风格", "人物识别", "配音", "旁白", "解说", "一分钟看完", "edit this video", "make a montage", "make a trailer", "cut this down".
 ---
 
 # Video edit
@@ -55,6 +55,25 @@ Fix ASR mistakes before captioning: misheard words go in `subtitles.replace`; mi
 mistimed words are corrected in `analysis.json` itself (keep a copy of the original). Check
 names, numbers and any word the captions will highlight.
 
+### 2a. Who is in it (footage with people)
+
+```bash
+python3 $S/people.py $J/work/analysis.json [--exclude 588-708]
+```
+
+Detects faces (YuNet), recognises them (SFace) and clusters them into people P1, P2, ...
+(most shots first). Open `$J/work/people.jpg`: one face per person with their shot count.
+Name them from what you saw and heard (the run also prints names heard in the dialogue):
+
+```bash
+python3 $S/people.py $J/work/analysis.json --name "P1=Thom:wants to go to space" "P2=Celia:engineer"
+```
+
+`people.json` lists every appearance (time, face box). Names survive a re-scan. The style
+menu, cast intros (one per person, frozen on a frame with their face, cut-out box on that
+person) and recap scripts (`@P2`) use it. The models (~38 MB) download once to
+`~/.cache/video-edit/models`.
+
 ### 2b. When asked what the footage can become: the style menu
 
 ```bash
@@ -79,12 +98,26 @@ python3 $S/autocut.py $J/work/analysis.json --styles trailer,beatmix,vhs [--excl
 ```
 
 `--styles` takes a list or `recommended` / `top3` / `all`. Recipes exist for `trailer`,
-`beatmix`, `cast`, `karaoke`, `vhs`, `silent`, `cyberpunk`. Each recipe picks shots from the
+`beatmix`, `cast`, `karaoke`, `vhs`, `silent`, `cyberpunk` and `recap`. Each recipe picks shots from the
 style features (every piece lies inside one detected shot, so no flash frames), writes
 `$J/auto/edl_<style>.json`, renders `$J/out/auto_<style>_<aspect>.mp4` with `--qa`, and
 the run ends with `$J/auto/report.md` (length, QA, notes per style) and
 `$J/auto/compare.jpg` (six frames per style). Without `--music`, the footage's longest
 stretch of music with no speech (score, credits) is extracted and used.
+
+`recap` is a narrated summary ("one-minute recap"). Write the script yourself after
+watching: one sentence per line in story order, each optionally followed by `|` and where
+its pictures come from, a source range and/or people:
+
+```text
+On a bridge in Amsterdam, Thom and Celia break up. | 0:25-0:45
+Forty years later, robots rule the city. | 1:10-1:22
+Old Thom wants to rewrite the past. | @P2 2:00-4:10
+```
+
+Pass it with `--script recap.txt [--voice Tingting] [--rate 190]`. Each line is spoken
+(`tts.py`), its shots fill exactly the length of the line, music ducks under the voice, and
+captions follow the narration.
 
 These are drafts, not deliverables. Open `compare.jpg` and each review sheet, read the
 notes (placeholder names, line choice, missing music), then refine every EDL you keep:
@@ -235,6 +268,9 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   separated from the background (medium shot, face visible).
 - Karaoke captions (`subtitles.karaoke`) need accurate word timings: fix the transcript
   first; captions with no word timings spread their words evenly.
+- Voice-over: `narration` in the EDL (see `reference/edl.md`) speaks lines with the system
+  voice (macOS `say`; `espeak-ng` on Linux), captions them and ducks music under them.
+  List voices with `python3 $S/tts.py --voices`; pick one that matches the language.
 - 3D: `text3d` style (extruded, gradient face, `flip_in` / `swing`, `rotate_x/y`) for titles;
   `text_behind` clip effect puts big text between background and person (rembg per frame,
   ~0.7 s/frame: keep it to 3-5 s on static shots); `overlays` add three.js light effects

@@ -117,3 +117,41 @@ def test_line_quality_prefers_whole_sentences():
     frag = {"text": "And a dick, but there's no reason to destroy the world"}
     good = {"text": "You broke my heart."}
     assert autocut.line_quality(good) > autocut.line_quality(frag)
+
+
+def test_parse_script_line():
+    assert autocut.parse_script_line("A bridge. | 0:25-0:45") == ("A bridge.", {"range": (25.0, 45.0), "people": []})
+    assert autocut.parse_script_line("No range here") == ("No range here", None)
+    assert autocut.parse_script_line("x | 1:02:03-1:02:10")[1]["range"] == (3723.0, 3730.0)
+    assert autocut.parse_script_line("Old Thom. | @P2 8:00-9:48")[1] == {"range": (480.0, 588.0), "people": ["P2"]}
+
+
+# ---------------------------------------------------------------- people clustering
+def test_cluster_separates_people():
+    import numpy as np
+    import people
+    rng = np.random.default_rng(0)
+    a, b = rng.normal(size=128), rng.normal(size=128)
+    dets = []
+    for base, n in ((a, 5), (b, 4)):
+        for _ in range(n):
+            f = base + 0.25 * rng.normal(size=128)
+            dets.append({"feat": f / np.linalg.norm(f)})
+    groups = sorted(people.cluster(dets), key=len, reverse=True)
+    assert [len(g) for g in groups] == [5, 4]
+    assert set(groups[0]) == set(range(5))
+
+
+def test_person_box_stays_in_frame():
+    import people
+    box = people.person_box([0.9, 0.1, 0.1, 0.2])
+    assert 0 <= box[0] < box[2] <= 1 and box[3] == 1.0
+
+
+# ---------------------------------------------------------------- voice-over captions
+def test_caption_chunks_cover_the_line():
+    from tts import caption_chunks
+    ch = caption_chunks("四十年后，机器人占领了阿姆斯特丹，一小队科学家决定改写过去。", 6.0)
+    assert len(ch) == 3 and ch[0][1] == 0.0 and abs(ch[-1][2] - 6.0) < 0.01
+    en = caption_chunks("Forty years later, robots rule the city and a few scientists try to rewrite the past.", 5.0)
+    assert all(len(t) <= 55 for t, _, _ in en)

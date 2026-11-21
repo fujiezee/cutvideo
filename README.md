@@ -30,6 +30,9 @@ scripts are in [`examples/tears-of-steel/`](examples/tears-of-steel/).
 - `faster-whisper` for transcripts and subtitles (the model downloads on first use)
 - Optional: `rembg` for cleaner person cut-outs in character intros (OpenCV GrabCut is used
   otherwise)
+- Face recognition uses OpenCV's YuNet and SFace models (~38 MB, downloaded once to
+  `~/.cache/video-edit/models`)
+- Voice-over uses the system text-to-speech: macOS `say`, or `espeak-ng` on Linux
 
 ```bash
 pip3 install --user numpy opencv-python Pillow faster-whisper
@@ -101,6 +104,10 @@ python3 $S/render.py edits/demo/edl.json           # final
   neon grid) composited like a screen blend
 - **Style menu:** scores what a film can be cut into (trailer, cast intros, silent film,
   cyberpunk, ...) with the shots that support each style
+- **People:** recognises who is in the footage, groups every appearance per person, and
+  lets the editor name them; cast intros and recaps use it
+- **Voice-over:** narration spoken by the system voice, captioned, with music ducking under
+  it; narrated "one-minute recap" drafts from a script
 - **Auto drafts:** one command cuts first drafts of several styles from the same footage,
   renders and checks them, and lays them side by side for review
 
@@ -113,8 +120,10 @@ cd .claude/skills/video-edit && python3 -m pytest tests -q
 ```
 
 The suite builds a 24-second synthetic clip, analyses it once, and checks the pure logic
-(caption matching, format derivation, intro snapping, 3D text, shot picking) and the
-pipeline end to end (render, formats, loudness and true peak, style menu, auto drafts).
+(caption matching, format derivation, intro snapping, 3D text, shot picking, people
+clustering, voice-over captions) and the
+pipeline end to end (render, formats, loudness and true peak, style menu, auto drafts,
+narration).
 It needs `pytest` and runs in about 20 seconds; no speech model is used.
 
 ## Docs

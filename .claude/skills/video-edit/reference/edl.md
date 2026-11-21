@@ -262,6 +262,27 @@ Three.js light effects or any alpha video above the picture and below the text:
   overrides the browser) on black and keyed by brightness, so overlaying adds light like a
   screen blend. Cached in `.render/fx/`.
 
+## narration
+
+Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `espeak-ng`):
+
+```json
+"narration": {"voice": "Samantha", "rate": 190, "volume": 1.0, "captions": true,
+              "items": [{"text": "Forty years later, robots rule the city.", "clip": 2, "start": 0.3},
+                        {"text": "One team tries to rewrite the past.", "at": 12.0}]}
+```
+
+- Each item is placed like a sound: `clip` + `start` (clip seconds) or absolute `at`.
+  `voice` and `rate` (words per minute) can be set per item; the default voice follows the
+  language of the text (Tingting for Chinese, Samantha for English on macOS).
+- Lines are synthesised once and cached in `.render/tts/` (leading and trailing silence
+  trimmed), mixed with the dialogue, and feed the side-chain: music tracks with
+  `"duck": true` dip under them.
+- `captions` (default true) adds manual captions split at punctuation and timed by length;
+  subtitle settings (`size`, `pos`, style) apply.
+- Make each clip group at least as long as its line plus ~0.5 s; `--qa` then checks that
+  every narration caption is intelligible in the mix.
+
 ## music
 
 ```json

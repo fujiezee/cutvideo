@@ -35,8 +35,19 @@ _NUM.update({"一": "one", "二": "two", "三": "three", "四": "four", "五": "
              "八": "eight", "九": "nine", "十": "ten", "两": "two"})
 
 
+# steers Whisper to Simplified characters (it often answers Mandarin in Traditional)
+_PROMPT = {"zh": "以下是普通话的句子，使用简体中文。"}
+try:
+    import opencc as _opencc
+    _T2S = _opencc.OpenCC("t2s")
+except Exception:  # optional
+    _T2S = None
+
+
 def tokens(text: str) -> list[str]:
     """Words for Latin scripts, single characters for CJK; lower case, no punctuation."""
+    if _T2S is not None:
+        text = _T2S.convert(text)
     out, buf = [], ""
     for ch in text.lower():
         if _cjk(ch):
@@ -96,14 +107,15 @@ def intelligibility(path: str, subs: list[dict], model_name: str, lang: str | No
     audio = decode_audio_mono(path, 16000)
     model = WhisperModel(model_name, device="auto", compute_type="int8")
     # no VAD: speech under music must still be attempted
-    segs, _ = model.transcribe(audio, language=lang, vad_filter=False, word_timestamps=True)
+    segs, _ = model.transcribe(audio, language=lang, vad_filter=False, word_timestamps=True,
+                               initial_prompt=_PROMPT.get(lang))
     words = [(w.start, w.end, w.word) for s in segs for w in (s.words or [])]
 
     def recheck(a, b):
         """Transcribe only the caption's own window: long-form decoding can drop lines near
         30 s window edges, which would be a false alarm."""
         i0, i1 = max(0, int((a - 1.0) * 16000)), int((b + 1.0) * 16000)
-        sg, _ = model.transcribe(audio[i0:i1], language=lang, vad_filter=False)
+        sg, _ = model.transcribe(audio[i0:i1], language=lang, vad_filter=False, initial_prompt=_PROMPT.get(lang))
         return tokens(" ".join(x.text for x in sg))
 
     res = []
@@ -145,7 +157,15 @@ def qa(video, subs_path=None, model="small", lang=None, out=None) -> dict:
     loud = loudness(video)
     sil = silences(video)
     lines = []
-    if subs:
+    if subs:  # transcribe in the captions' language (narration may differ from the source)
+        text = "".join(str(x.get("text", "")) for x in subs)
+        cjk = sum(1 for ch in text if _cjk(ch))
+        letters = sum(1 for ch in text if ch.isalpha())
+        cap_lang = "zh" if cjk > 0.3 * max(letters, 1) else "en" if text.isascii() else None
+        if cap_lang and cap_lang != lang:
+            if lang:
+                log(f"qa: captions are '{cap_lang}', transcribing in '{cap_lang}' (not '{lang}')")
+            lang = cap_lang
         log(f"qa: re-transcribing the output to check {len(subs)} caption(s)")
         try:
             lines = intelligibility(video, subs, model, lang)

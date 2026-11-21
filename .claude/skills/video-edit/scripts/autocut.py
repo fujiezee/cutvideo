@@ -237,7 +237,68 @@ def r_trailer(f, P, o):
     return edl, notes
 
 
+def _pad_box(box, sw, sh, W, H):
+    """Source-frame fractions -> output-frame fractions for `fit: pad`."""
+    sc = min(W / sw, H / sh)
+    ox, oy = (W - sw * sc) / 2, (H - sh * sc) / 2
+    return [round((ox + box[0] * sw * sc) / W, 4), round((oy + box[1] * sh * sc) / H, 4),
+            round((ox + box[2] * sw * sc) / W, 4), round((oy + box[3] * sh * sc) / H, 4)]
+
+
+def r_cast_people(f, P, o, W=1920, H=1080):
+    """One intro per recognised person, frozen on a frame where their face was found."""
+    from people import person_box
+    dims = {v["id"]: (v["width"], v["height"]) for v in o["videos"]}
+    by_vid_shot = {}
+    for s in f["all"]:
+        by_vid_shot.setdefault(s["vid"], []).append(s)
+    clips, named = [{"type": "color", "color": "#000000", "duration": 2.0}], 0
+    for p in f["people"][:6]:
+        best = None
+        for a in sorted(p["appearances"], key=lambda a: -a["area"]):
+            s = next((s for s in by_vid_shot.get(a["vid"], []) if s["start"] <= a["t"] < s["end"]), None)
+            if not s or s["end"] - s["start"] < 2.0 or s.get("faces", 1) > 2:
+                continue
+            a0 = max(s["start"] + 0.15, a["t"] - 1.0)
+            b0 = min(s["end"] - 0.15, a0 + 3.4)
+            if b0 - a0 < 1.8 or not P.free(s, a0, b0):
+                continue
+            best = (s, a, round(a0, 3), round(b0, 3))
+            break
+        if not best:
+            continue
+        s, a, a0, b0 = best
+        P.used.append((s["vid"], a0, b0))
+        k = len(clips)
+        named += bool(p["name"])
+        sw, sh = dims[s["vid"]]
+        clips.append({"src": s["vid"], "in": a0, "out": b0, "volume": 0.6,
+                      "effects": [{"type": "intro", "at": round(a["t"] - a0, 3), "hold": 1.6,
+                                   "name": p["name"] or f"人物 {k:02d}", "role": p["role"] or "CHARACTER",
+                                   "index": f"{k:02d}", "bg": "bw",
+                                   "box": _pad_box(person_box(a["box"]), sw, sh, W, H)}]})
+    if len(clips) < 3:
+        return None, ["fewer than two recognised people with a usable shot"]
+    clips[1]["transition"] = {"type": "fadeblack", "duration": 0.4}
+    card, credit = end_card(o["credit"], 2.6)
+    clips.append(card)
+    edl = {"output": {"width": W, "height": H, "fps": 24, "fit": "pad"}, "grade": "trailer", "clips": clips,
+           "music": music_block(o["music"], 0.7),
+           "sounds": [{"sfx": "hit", "clip": 0, "start": 0.3, "volume": 0.5}],
+           "texts": [{"text": o["title"], "clip": 0, "start": 0.3, "end": 1.9, "style": "card"}]
+           + ([credit] if credit else [])}
+    n = len(clips) - 2
+    notes = [f"{n} recognised people, one intro each"]
+    if named < n:
+        notes.append("unnamed people show placeholders: people.py --name P1=Name:role, then rerun")
+    return edl, notes
+
+
 def r_cast(f, P, o):
+    if f.get("people"):
+        edl, notes = r_cast_people(f, P, o)
+        if edl:
+            return edl, notes
     long_ = lambda lst: [s for s in lst if s["dur"] >= 2.4]  # noqa: E731  (room for the freeze at 1.0 s)
     picks = P.take(long_(f["closeups"]), 5, 3.4, key="face_area", min_gap=60, fallback=long_(f["faces_any"]))
     if len(picks) < 2:
@@ -372,8 +433,102 @@ def r_cyberpunk(f, P, o):
     return edl, [] if len(f["dark_neon"]) >= 6 else ["few dark/neon shots: the look will feel forced"]
 
 
+def _ts(x: str) -> float:
+    parts = [float(p) for p in x.strip().split(":")]
+    return sum(v * 60 ** k for k, v in enumerate(reversed(parts)))
+
+
+def parse_script_line(raw: str):
+    """'text | 0:25-0:45 @P2' -> ('text', {"range": (25.0, 45.0), "people": ["P2"]}).
+    After '|': an optional source range and/or @person references (people.json id or name)."""
+    text, sep, spec = raw.rpartition("|")
+    if not sep:
+        return raw.strip(), None
+    out = {"range": None, "people": []}
+    for tok in spec.split():
+        if tok.startswith("@"):
+            out["people"].append(tok[1:])
+        elif "-" in tok:
+            try:
+                a, b = tok.split("-")
+                out["range"] = (_ts(a), _ts(b))
+            except ValueError:
+                return raw.strip(), None
+        else:
+            return raw.strip(), None
+    return text.strip(), out
+
+
+def r_recap(f, P, o):
+    """Narrated recap: one script line per story beat, shots from the matching part of the
+    film in story order, each group exactly as long as its spoken line."""
+    script = o.get("script") or []
+    if not script:
+        return None, ["needs a narration script: one sentence per line in story order, optionally "
+                      "'| m:ss-m:ss' for the source range of that beat; pass --script"]
+    from tts import synth
+    shots = sorted(f["all"], key=lambda s: (s["vid"], s["start"]))
+    if len(shots) < len(script):
+        return None, ["fewer shots than script lines"]
+    n = len(script)
+    clips, items = [{"type": "color", "color": "#000000", "duration": 1.6, "snap": False}], []
+    texts = [{"text": o["title"], "clip": 0, "start": 0.2, "end": 1.5, "style": "card"}]
+    for i, raw in enumerate(script):
+        line, rng = parse_script_line(raw)
+        _, dur = synth(line, o["tts_dir"], o.get("voice"), o.get("rate"))
+        if rng:  # the editor said where this beat is in the source and/or who should be seen
+            part = shots
+            if rng["range"]:
+                a_, b_ = rng["range"]
+                part = [s for s in part if s["end"] > a_ and s["start"] < b_]
+            if rng["people"]:
+                who = [p for p in f.get("people", []) if p["id"] in rng["people"]
+                       or any(r and r in p.get("name", "") for r in rng["people"])]
+                seen = {(a["vid"], a["t"]) for p in who for a in p["appearances"]}
+                part = [s for s in part if any(v == s["vid"] and s["start"] <= t < s["end"] for v, t in seen)]
+            part = part or shots[:1]
+        else:
+            part = shots[len(shots) * i // n: max(len(shots) * (i + 1) // n, len(shots) * i // n + 1)]
+        need, group = dur + 0.9, []  # line starts 0.3 s in, plus transition overlap
+        for s in sorted(part, key=lambda s: -s["score"]):
+            if need <= 0.3:
+                break
+            p = P.piece(s, min(2.6, max(1.2, need)))
+            if p:
+                group.append((s, p))
+                need -= p[1] - p[0]
+        if need > 0.3:  # stretch the last piece or borrow from the neighbours
+            for s in sorted(shots, key=lambda s: abs(s["start"] - part[-1]["start"])):
+                if need <= 0.3:
+                    break
+                p = P.piece(s, min(2.6, max(1.2, need)))
+                if p:
+                    group.append((s, p))
+                    need -= p[1] - p[0]
+        group.sort(key=lambda x: (x[0]["vid"], x[0]["start"]))
+        first = len(clips)
+        for k, (s, p) in enumerate(group):
+            c = clip(s, p, volume=0.2, snap=False)
+            if k == 0 and i:
+                c["transition"] = {"type": "fade", "duration": 0.25}
+            clips.append(c)
+        items.append({"text": line, "clip": first, "start": 0.3})
+    card, credit = end_card(o["credit"])
+    clips.append(card)
+    if credit:
+        texts.append(credit)
+    edl = {"output": {"width": 1920, "height": 1080, "fps": 24, "fit": "crop"}, "grade": "trailer", "clips": clips,
+           "music": music_block(o["music"], 0.6, duck=True),
+           "narration": {"items": items, **({"voice": o["voice"]} if o.get("voice") else {}),
+                         **({"rate": o["rate"]} if o.get("rate") else {})},
+           "subtitles": {"enabled": True, "from": "manual", "size": 0.045, "pos": [0.5, 0.88]},
+           "texts": texts}
+    return edl, [f"{n} narration lines; check each line's shots illustrate it, swap shots in the EDL if not"]
+
+
 RECIPES = {"trailer": r_trailer, "beatmix": r_beatmix, "cast": r_cast, "karaoke": r_karaoke, "vhs": r_vhs,
-           "silent": r_silent, "cyberpunk": r_cyberpunk}
+           "silent": r_silent, "cyberpunk": r_cyberpunk,
+           "recap": r_recap}
 ASPECT = {(1920, 1080): "16x9", (1080, 1920): "9x16", (1440, 1080): "4x3", (1080, 1080): "1x1"}
 
 
@@ -471,6 +626,9 @@ def main():
     ap.add_argument("--title", default=None)
     ap.add_argument("--credit", default="", help="attribution line for the end card")
     ap.add_argument("--exclude", nargs="*", default=[])
+    ap.add_argument("--script", default=None, help="recap narration: text file, one sentence per line")
+    ap.add_argument("--voice", default=None, help="tts voice (tts.py --voices)")
+    ap.add_argument("--rate", type=int, default=None, help="tts speaking rate (words per minute)")
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--no-render", action="store_true")
     a = ap.parse_args()
@@ -488,8 +646,11 @@ def main():
     styles = choose(a.styles, ranked)
     music = None if a.no_music else (str(Path(a.music).resolve()) if a.music else find_music(an, job))
     title = a.title or Path(an["videos"][0]["path"]).stem.replace("_", " ")
-    o = {"music": music, "title": title, "credit": a.credit}
     auto_dir = job / "auto"
+    script = ([ln.strip() for ln in Path(a.script).read_text(encoding="utf-8").splitlines() if ln.strip()]
+              if a.script else [])
+    o = {"music": music, "title": title, "credit": a.credit, "videos": an["videos"], "script": script,
+         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts"}
     auto_dir.mkdir(exist_ok=True)
     (job / "out").mkdir(exist_ok=True)
     score = {s["key"]: s["score"] for s in ranked}

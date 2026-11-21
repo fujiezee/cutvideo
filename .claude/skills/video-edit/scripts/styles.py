@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import fmt_ts, load_json, log, save_json  # noqa: E402
+from people import load_people  # noqa: E402
 
 
 # ------------------------------------------------------------------ features
@@ -95,6 +96,7 @@ def features(an: dict, work: Path, exclude=()) -> dict:
         "speech_ratio": min(1.0, (said if has_tr else 0.5 * speech) / max(total, 1)),
         "lines": lines,
         "all": shots,
+        "people": [p for p in load_people(work) if p["shots"] >= 3],
         "action": [s for s in shots if s.get("motion", 0) > 0.11 and s["dur"] >= 0.8],
         "faces_any": [s for s in shots if s["faces"] >= 1],
         "closeups": [s for s in shots if s["faces"] == 1 and s["face_area"] > 0.035],
@@ -149,11 +151,21 @@ def catalogue(f: dict) -> list[dict]:
         [f"{A} action shots", f"{f['shots']} shots in total"], "action: " + _shots(_pick(f["action"], 6)),
         "9:16, 15-30 s", music_gap + (["not enough action for one shot per beat"] if A < 10 else []))
 
-    add("cast", "Cast intros 人物介绍",
-        0.7 * _clip(C, 4, 20) + 0.3 * _clip(len(f["faces_any"]), 10, 60),
-        [f"{C} single-person close/medium shots", f"{len(f['faces_any'])} shots with faces"],
-        "freeze candidates: " + _shots(_pick(f["closeups"], 6, "face_area")),
-        "16:9 or 9:16, 5-8 s per person", ["identify who is who from the sheets / transcript"])
+    P_ = f["people"]
+    if P_:  # recognised people: score on how many distinct characters there are
+        add("cast", "Cast intros 人物介绍",
+            0.6 * _clip(len(P_), 1, 6) + 0.4 * _clip(C, 4, 20),
+            [f"{len(P_)} recognised people (3+ shots each)", f"{C} single-person close/medium shots"],
+            "people: " + ", ".join(f"{p['id']} {p['name'] or ''} ({p['shots']} shots)".replace("  ", " ")
+                                   for p in P_[:6]),
+            "16:9 or 9:16, 5-8 s per person",
+            [] if all(p["name"] for p in P_[:5]) else ["name the people: people.py --name P1=..."])
+    else:
+        add("cast", "Cast intros 人物介绍",
+            0.7 * _clip(C, 4, 20) + 0.3 * _clip(len(f["faces_any"]), 10, 60),
+            [f"{C} single-person close/medium shots", f"{len(f['faces_any'])} shots with faces"],
+            "freeze candidates: " + _shots(_pick(f["closeups"], 6, "face_area")),
+            "16:9 or 9:16, 5-8 s per person", ["run people.py to tell who is who"])
 
     best_window, best_at = 0, None
     ls = sorted(f["lines"], key=lambda l: l["start"])
@@ -211,9 +223,10 @@ def catalogue(f: dict) -> list[dict]:
         "dark shots: " + _shots(_pick(f["dark_neon"], 5)), "16:9, accents of 2-5 s", [])
 
     add("recap", "One-minute recap 一分钟看完",
-        0.2 * _clip(f["duration"], 300, 1200) + 0.2 * _clip(L, 5, 20),
-        ["needs a narrated voice-over over the story"], "", "16:9 or 9:16, 60-90 s",
-        ["no voice-over (TTS) feature yet: possible with captions-only narration"])
+        0.5 * _clip(f["duration"], 240, 1200) + 0.3 * _clip(f["shots"], 40, 200) + 0.2 * _clip(L, 5, 20),
+        [f"{fmt_ts(f['duration'])} of story to summarise", f"{f['shots']} shots to illustrate it"],
+        "narrated voice-over (tts.py) over shots in story order", "16:9 or 9:16, 45-90 s",
+        ["needs a narration script written from the story (one sentence per line)"])
     return sorted(S, key=lambda s: -s["score"])
 
 

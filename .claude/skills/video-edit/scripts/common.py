@@ -145,9 +145,13 @@ def load_json(p: str | Path) -> dict:
 
 
 def save_json(obj, p: str | Path):
-    Path(p).parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
+    """Write JSON atomically (temp file + rename): a crash never leaves a half-written file."""
+    p = Path(p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
+    tmp.replace(p)
 
 
 def decode_audio_mono(path: str | Path, sr: int = 16000):
