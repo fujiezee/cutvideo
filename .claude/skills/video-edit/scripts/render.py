@@ -194,7 +194,7 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     iv = 0
     if any(e.get("type") == "intro" for e in effects):
         import intro as _intro
-        iv = _intro.VERSION
+        iv = f"{_intro.VERSION}-{_intro.backend()}"  # re-render when the cut-out backend changes
     key = hashlib.sha1(json.dumps({"c": vclip, "W": W, "H": H, "fps": fps, "g": grade, "fit": fit,
                                    "q": ctx["clip_q"], "v": 6, "iv": iv}, sort_keys=True).encode()).hexdigest()[:12]
     out = ctx["clip_dir"] / f"c{i:03d}_{key}.mp4"

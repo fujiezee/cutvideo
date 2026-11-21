@@ -110,7 +110,9 @@ optional `index`. `side`: where the text goes (`auto` = opposite the person).
 
 - Cut-out: OpenCV GrabCut seeded by the face (bundled Haar cascades) and the `box`
   (fractions of the output frame, after crop/pad). Without `box` the person is found from the
-  face. If `rembg` is installed it is used instead (better edges).
+  face. If `rembg` is installed it is used instead (better edges, model downloads once to
+  `~/.rembg`); the `box` and the detected face still decide which person is the subject.
+  Cached clips re-render when the backend changes.
 - If no person can be isolated (no face and no box, or the cut-out covers <8% or >85% of the
   frame) the intro uses the no-cut-out look: colour frame, darkened edges, same panel.
 

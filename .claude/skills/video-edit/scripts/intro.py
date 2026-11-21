@@ -21,7 +21,7 @@ from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from common import ffmpeg, find_font, load_font, log
 
-VERSION = 3  # bump when the look changes so cached clips re-render
+VERSION = 4  # bump when the look changes so cached clips re-render
 
 
 # ------------------------------------------------------------------ cut-out
@@ -30,13 +30,6 @@ VERSION = 3  # bump when the look changes so cached clips re-render
 def cutout_mask(img: Image.Image, box=None) -> Image.Image | None:
     """Return an 'L' mask of the main person (255 = person), or None when no usable cut-out
     exists (no face and no box, e.g. an extreme close-up that fills the frame)."""
-    try:
-        from rembg import new_session, remove  # optional, better quality
-        sess = new_session("u2net_human_seg")
-        m = remove(img, session=sess, only_mask=True)
-        return m.convert("L")
-    except Exception:
-        pass
     import cv2
 
     W, H = img.size
@@ -44,6 +37,10 @@ def cutout_mask(img: Image.Image, box=None) -> Image.Image | None:
     small = np.array(img.resize((int(W * k), int(H * k)))).astype("uint8")[:, :, ::-1].copy()
     h, w = small.shape[:2]
     face = _largest_face(small, box)
+    if backend() == "rembg":
+        m = _rembg_mask(img, box, face, k)
+        if m is not None:
+            return m
     if box is None:  # derive a person box from the face
         if face is None:
             return None
@@ -90,6 +87,53 @@ def cutout_mask(img: Image.Image, box=None) -> Image.Image | None:
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     m = cv2.resize(m, (W, H), interpolation=cv2.INTER_LINEAR)
     return Image.fromarray(m).filter(ImageFilter.GaussianBlur(1.5))
+
+
+_REMBG = {}
+
+
+def backend() -> str:
+    """'rembg' when installed (better edges), otherwise 'grabcut'."""
+    try:
+        import rembg  # noqa: F401
+        return "rembg"
+    except Exception:
+        return "grabcut"
+
+
+def _rembg_mask(img, box, face, k):
+    """rembg person mask limited to the box and to the person whose face was found."""
+    import cv2
+    try:
+        from rembg import new_session, remove
+        if "s" not in _REMBG:
+            _REMBG["s"] = new_session("u2net_human_seg")
+        m = np.asarray(remove(img, session=_REMBG["s"], only_mask=True).convert("L")).copy()
+    except Exception as e:
+        log(f"rembg failed ({e}); using GrabCut")
+        return None
+    H, W = m.shape
+    if box is not None:  # other people outside the box are not the subject
+        x0, y0, x1, y1 = int(box[0] * W), int(box[1] * H), int(box[2] * W), int(box[3] * H)
+        keep = np.zeros_like(m)
+        keep[y0:y1, x0:x1] = 1
+        m = m * keep
+    binm = (m > 127).astype("uint8")
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(binm)
+    if n > 1:
+        ids = set()
+        if face is not None:  # face found on the downscaled frame -> scale back
+            fx, fy, fw, fh = [int(v / k) for v in face]
+            ids = set(np.unique(lab[fy + fh // 3: fy + 2 * fh // 3, fx + fw // 3: fx + 2 * fw // 3])) - {0}
+        if not ids:
+            ids = {1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))}
+        # keep soft edges of the chosen component(s)
+        sel = np.isin(lab, list(ids)).astype("uint8")
+        sel = cv2.dilate(sel, np.ones((5, 5), np.uint8))
+        m = m * sel
+    if m.max() < 128:
+        return None
+    return Image.fromarray(m.astype("uint8"))
 
 
 def _largest_face(bgr, box=None):
