@@ -196,7 +196,11 @@ def music_beats(path: str) -> dict:
 # ---------------------------------------------------------------- transcript
 
 
-def transcribe(path: str, model_name: str, lang: str | None) -> dict | None:
+VERBATIM = {"en": "Umm, so, uh, I mean, like, you know, hmm... Okay, uh, let's go.",
+            "zh": "嗯，那个，就是说，呃，我们今天，嗯，来聊一下。"}
+
+
+def transcribe(path: str, model_name: str, lang: str | None, verbatim: bool = False) -> dict | None:
     try:
         from faster_whisper import WhisperModel
     except ImportError:
@@ -205,8 +209,11 @@ def transcribe(path: str, model_name: str, lang: str | None) -> dict | None:
     log(f"transcribing with faster-whisper/{model_name} (first run downloads the model)...")
     model = WhisperModel(model_name, device="auto", compute_type="int8")
     audio = decode_audio_mono(path, 16000)  # avoid PyAV version issues inside faster-whisper
+    prompt = "以下是普通话的句子，使用简体中文。" if lang in ("zh", None) else None
+    if verbatim:  # Whisper drops "um"/"嗯" unless the prompt shows them; needed to cut them out
+        prompt = VERBATIM.get(lang or "en", VERBATIM["en"]) if lang != "zh" else prompt + VERBATIM["zh"]
     segs, info = model.transcribe(audio, language=lang, vad_filter=True, word_timestamps=True,
-                                  initial_prompt="以下是普通话的句子，使用简体中文。" if lang in ("zh", None) else None)
+                                  initial_prompt=prompt)
     out = []
     for s in segs:
         out.append({
@@ -287,6 +294,8 @@ def main():
     ap.add_argument("--model", default="small", help="faster-whisper model: tiny/base/small/medium/large-v3")
     ap.add_argument("--lang", default=None, help="force language code, e.g. zh / en")
     ap.add_argument("--scene-threshold", type=float, default=0.3)
+    ap.add_argument("--verbatim", action="store_true",
+                    help="transcribe filler words (um/uh/嗯/呃) too, so draft_edl --drop-fillers can cut them")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -313,7 +322,7 @@ def main():
         speech_total = sum(b - a for a, b in aud.get("speech_spans", []))
         if info.get("has_audio") and not args.no_transcribe and speech_total > 2:
             try:
-                tr = transcribe(v, args.model, args.lang)
+                tr = transcribe(v, args.model, args.lang, args.verbatim)
             except Exception as e:  # keep going without transcript
                 log(f"[{vid}] transcription failed: {e}")
         log(f"[{vid}] contact sheets...")

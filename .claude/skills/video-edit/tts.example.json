@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy to ~/.config/cutvideo/tts.json (all jobs) or <job>/tts.json (one job). Keys are read from the environment variables named here, never stored in this file.",
+  "provider": "system",
+  "languages": {
+    "zh": {
+      "provider": "http",
+      "url": "https://YOUR-TTS-ENDPOINT/v1/tts",
+      "headers": {"Authorization": "Bearer ${ZH_TTS_API_KEY}", "Content-Type": "application/json"},
+      "body": {"model": "YOUR-CHINESE-MODEL", "text": "${text}", "voice": "${voice}", "speed": "${speed}", "format": "wav"},
+      "voice": "YOUR-CHINESE-VOICE",
+      "response": {"type": "audio"}
+    },
+    "en": {
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "gpt-4o-mini-tts",
+      "voice": "alloy"
+    }
+  }
+}

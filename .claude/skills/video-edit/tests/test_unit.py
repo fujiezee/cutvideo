@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import autocut
 import qa
@@ -155,3 +156,120 @@ def test_caption_chunks_cover_the_line():
     assert len(ch) == 3 and ch[0][1] == 0.0 and abs(ch[-1][2] - 6.0) < 0.01
     en = caption_chunks("Forty years later, robots rule the city and a few scientists try to rewrite the past.", 5.0)
     assert all(len(t) <= 55 for t, _, _ in en)
+
+
+# ---------------------------------------------------------------- TTS providers
+def _serve(handler_body):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        seen = {}
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            H.seen = {"auth": self.headers.get("Authorization"), "body": json.loads(self.rfile.read(n))}
+            ctype, payload = handler_body()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, H
+
+
+def _wav_bytes(tmp_path):
+    import subprocess
+    p = tmp_path / "tone.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-t", "1.2", "-i", "sine=frequency=440",
+                    str(p)], check=True)
+    return p.read_bytes()
+
+
+def test_tts_http_provider_raw_and_json(tmp_path, monkeypatch):
+    import base64
+    import tts
+    audio = _wav_bytes(tmp_path)
+    monkeypatch.setenv("FAKE_TTS_KEY", "secret123")
+    srv, H = _serve(lambda: ("audio/wav", audio))
+    cfg = {"provider": "http", "url": f"http://127.0.0.1:{srv.server_port}/speak",
+           "headers": {"Authorization": "Bearer ${FAKE_TTS_KEY}", "Content-Type": "application/json"},
+           "body": {"input": "${text}", "voice": "${voice}", "speed": "${speed}"}, "voice": "narrator"}
+    p, d = tts.synth("Hello there.", tmp_path / "out", config=cfg)
+    assert abs(d - 1.2) < 0.15 and H.seen["auth"] == "Bearer secret123"
+    assert H.seen["body"] == {"input": "Hello there.", "voice": "narrator", "speed": 1.0}
+    srv.shutdown()
+
+    srv, H = _serve(lambda: ("application/json",
+                             json.dumps({"data": {"audio": base64.b64encode(audio).decode()}}).encode()))
+    cfg2 = {**cfg, "url": f"http://127.0.0.1:{srv.server_port}/speak",
+            "response": {"type": "json", "base64": "data.audio"}}
+    p2, d2 = tts.synth("Second line.", tmp_path / "out", config=cfg2)
+    assert p2 != p and abs(d2 - 1.2) < 0.15
+    srv.shutdown()
+
+
+def test_tts_missing_key_is_an_error(monkeypatch):
+    import pytest
+    import tts
+    monkeypatch.delenv("NOPE_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        tts._env("Bearer ${NOPE_KEY}")
+
+
+def test_tts_config_layers(tmp_path, monkeypatch):
+    import tts
+    (tmp_path / "tts.json").write_text(json.dumps({"provider": "openai", "model": "m1", "voice": "alloy"}))
+    monkeypatch.setattr(tts, "USER_CONFIG", tmp_path / "none.json")
+    cfg = tts.load_config(tmp_path)
+    assert cfg == {"provider": "openai", "model": "m1", "voice": "alloy"}
+
+
+def test_tts_picks_provider_by_language():
+    import tts
+    cfg = {"provider": "system", "languages": {
+        "zh": {"provider": "http", "url": "http://x/zh", "voice": "zh-female"},
+        "en": {"voice": "Samantha"}}}
+    zh = tts.for_language(cfg, tts.lang_of("四十年后，机器人占领了这座城市。"))
+    en = tts.for_language(cfg, tts.lang_of("Forty years later, robots rule the city."))
+    assert zh == {"provider": "http", "url": "http://x/zh", "voice": "zh-female"}
+    assert en == {"provider": "system", "voice": "Samantha"}
+
+
+# ---------------------------------------------------------------- brand, fillers, voice presets
+def test_brand_signature_on_end_card(tmp_path):
+    from brand import apply_brand
+    edl = {"output": {"width": 1920, "height": 1080}, "brand": True,
+           "clips": [{"src": "v1", "in": 0, "out": 2}, {"type": "color", "duration": 2}]}
+    b = apply_brand(edl, tmp_path)
+    sig = [t for t in edl["texts"] if t.get("_brand")]
+    assert len(sig) == 1 and sig[0]["clip"] == -1
+    assert b["name"] in sig[0]["text"] and b["url"] in sig[0]["text"]
+    edl2 = {"clips": [{"type": "color", "duration": 2}], "brand": False}
+    assert apply_brand(edl2, tmp_path) is None and "texts" not in edl2
+
+
+def test_brand_job_override(tmp_path):
+    from brand import load_brand
+    (tmp_path / "brand.json").write_text(json.dumps({"name": "Acme", "signature": "by {name}"}))
+    from brand import signature
+    assert signature(load_brand(tmp_path)) == "by Acme"
+
+
+def test_fillers_are_cut_out():
+    from draft_edl import speech_spans_without_fillers
+    w = lambda a, b, t: {"start": a, "end": b, "word": t}  # noqa: E731
+    words = [w(0.0, 0.3, " Umm,"), w(0.5, 0.8, " so"), w(0.85, 1.2, " today,"), w(1.4, 1.6, " uh,"),
+             w(1.8, 2.0, " we"), w(2.05, 2.4, " talk."), w(2.6, 2.8, " 嗯"), w(3.0, 3.4, " 好")]
+    spans = speech_spans_without_fillers(words, pad=0.0)
+    assert spans == [[0.5, 1.2], [1.8, 2.4], [3.0, 3.4]]
+
+
+def test_voice_presets_exist():
+    for k in ("clean", "denoise", "broadcast"):
+        assert "afftdn" in render.VOICE[k]

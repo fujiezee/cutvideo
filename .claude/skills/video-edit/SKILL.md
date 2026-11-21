@@ -1,6 +1,6 @@
 ---
 name: video-edit
-description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, face recognition of the cast, narrated recaps with text-to-speech, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "全剪", "多种风格", "人物识别", "配音", "旁白", "解说", "一分钟看完", "edit this video", "make a montage", "make a trailer", "cut this down".
+description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, face recognition of the cast, narrated recaps with text-to-speech, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "全剪", "多种风格", "人物识别", "配音", "旁白", "解说", "一分钟看完", "封面", "降噪", "口头禅", "edit this video", "make a montage", "make a trailer", "cut this down".
 ---
 
 # Video edit
@@ -119,6 +119,9 @@ Pass it with `--script recap.txt [--voice Tingting] [--rate 190]`. Each line is 
 (`tts.py`), its shots fill exactly the length of the line, music ducks under the voice, and
 captions follow the narration.
 
+Every auto draft carries the brand signature on its end card ("Made with cutvideo · ..."),
+see `brand.json`; `--no-brand` leaves it out.
+
 These are drafts, not deliverables. Open `compare.jpg` and each review sheet, read the
 notes (placeholder names, line choice, missing music), then refine every EDL you keep:
 real names, a story order for the lines, the strongest shots, text. Render again with
@@ -228,6 +231,11 @@ Each format gets its own output (`name_9x16.mp4`, ...): narrower targets switch 
 face-tracked crops, captions are re-placed and re-wrapped, intro boxes are re-detected.
 Put per-format tweaks under `"formats": {"9:16": {...}}` in the EDL and review every format.
 
+Covers: `python3 $S/cover.py $J/work/analysis.json --title "..." [--subtitle "..."]`
+makes cover images for 16:9 / 9:16 / 3:4 / 1:1 from the main characters' best face frames
+(people.json) with a 3D title, in `$J/covers/` with a `sheet.jpg` to choose from. Look at
+the sheet; use `--at <seconds>` to force frames you prefer.
+
 Give the user: the output path, length/format, a 3-6 line description of the cut (story,
 key moments used, effects, music), the `.srt` path if subtitles were made, and anything in
 `plan.md` that changed or could not be done. Offer
@@ -268,9 +276,18 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   separated from the background (medium shot, face visible).
 - Karaoke captions (`subtitles.karaoke`) need accurate word timings: fix the transcript
   first; captions with no word timings spread their words evenly.
-- Voice-over: `narration` in the EDL (see `reference/edl.md`) speaks lines with the system
-  voice (macOS `say`; `espeak-ng` on Linux), captions them and ducks music under them.
-  List voices with `python3 $S/tts.py --voices`; pick one that matches the language.
+- Voice-over: `narration` in the EDL (see `reference/edl.md`) speaks lines, captions them
+  and ducks music under them. The provider is configurable in `tts.json` (system voice by
+  default; OpenAI-compatible or any HTTP API), with a provider/voice per language so
+  Chinese lines get a Chinese voice and English lines an English one. See
+  `tts.example.json`; keys come from environment variables. `python3 $S/tts.py --show-config`
+  prints what is in effect.
+- Speech clean-up: `"audio": {"voice": "clean"}` (or `"voice"` per clip): `clean`,
+  `denoise`, `broadcast`. For talking heads, analyse with `--verbatim` and draft with
+  `draft_edl.py --mode jumpcut --drop-fillers` to cut "um / uh / 嗯 / 呃" out.
+- Brand: `"brand": true` adds the product signature to the end card (and a logo watermark
+  when `brand.json` has `logo` and `watermark.enabled`). A job's own `brand.json` overrides
+  the skill default.
 - 3D: `text3d` style (extruded, gradient face, `flip_in` / `swing`, `rotate_x/y`) for titles;
   `text_behind` clip effect puts big text between background and person (rembg per frame,
   ~0.7 s/frame: keep it to 3-5 s on static shots); `overlays` add three.js light effects

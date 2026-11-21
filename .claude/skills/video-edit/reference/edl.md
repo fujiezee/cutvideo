@@ -262,6 +262,24 @@ Three.js light effects or any alpha video above the picture and below the text:
   overrides the browser) on black and keyed by brightness, so overlaying adds light like a
   screen blend. Cached in `.render/fx/`.
 
+## brand
+
+`"brand": true` adds the signature from `brand.json` ("Made with {name} · {url}") to the
+last clip (small, at the bottom of an end card); an object overrides fields, e.g.
+`{"signature": "Edited by Acme"}`. With `logo` and `"watermark": {"enabled": true, "pos":
+[0.96, 0.05], "width": 0.08, "opacity": 0.6}` the logo stays on screen throughout. `font`
+becomes the output font unless the EDL sets one.
+
+## Speech clean-up
+
+`"audio": {"voice": "clean"}` for every clip, or `"voice": "..."` on one clip:
+
+| preset | chain |
+|---|---|
+| `denoise` | high-pass 70 Hz, FFT noise reduction |
+| `clean` | high-pass 80 Hz, noise reduction, de-esser, gentle compressor |
+| `broadcast` | as `clean` plus a 3 kHz presence lift and firmer compression |
+
 ## narration
 
 Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `espeak-ng`):
@@ -275,6 +293,14 @@ Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `esp
 - Each item is placed like a sound: `clip` + `start` (clip seconds) or absolute `at`.
   `voice` and `rate` (words per minute) can be set per item; the default voice follows the
   language of the text (Tingting for Chinese, Samantha for English on macOS).
+- Provider: `tts.json` in the job folder, `~/.config/cutvideo/tts.json`, or the skill
+  folder (merged in that order of strength: job > user > skill). `"provider"`: `system`
+  (default), `openai` (`base_url`, `api_key_env`, `model`, `voice`) or `http` (`url`,
+  `headers`, `body` with `${text}` `${voice}` `${speed}` `${rate}` placeholders, `response`:
+  `{"type": "audio"}` or `{"type": "json", "base64": "data.audio"}` / `{"url": "data.url"}`).
+  `${NAME}` in headers or url reads an environment variable. `"languages": {"zh": {...},
+  "en": {...}}` chooses settings by the language of each line. `narration.provider` in an
+  EDL overrides the file. See `tts.example.json`.
 - Lines are synthesised once and cached in `.render/tts/` (leading and trailing silence
   trimmed), mixed with the dialogue, and feed the side-chain: music tracks with
   `"duck": true` dip under them.

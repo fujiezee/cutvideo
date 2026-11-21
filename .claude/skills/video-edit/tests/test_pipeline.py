@@ -111,3 +111,22 @@ def test_narration_is_spoken_captioned_and_ducks_music(job):
     graph = (job / ".render" / "graph.txt").read_text()
     assert "sidechaincompress" in graph and "[ns0]" in graph
     assert probe(rep["output"])["dur"] > 4.5
+
+
+def test_covers_for_every_format(job):
+    from PIL import Image
+    run(sys.executable, SCRIPTS / "cover.py", job / "work" / "analysis.json", "--title", "Test",
+        "--subtitle", "SUB", "--formats", "16:9,9:16,1:1", "--n", "2", cwd=job)
+    sizes = {"16x9": (1280, 720), "9x16": (1080, 1920), "1x1": (1080, 1080)}
+    for tag, wh in sizes.items():
+        for k in (1, 2):
+            assert Image.open(job / "covers" / f"cover_{tag}_{k}.jpg").size == wh
+    assert (job / "covers" / "sheet.jpg").exists()
+
+
+def test_voice_preset_renders(job):
+    edl = {"analysis": "work/analysis.json", "audio": {"voice": "clean"},
+           "output": {"path": "out/voice.mp4", "width": 320, "height": 180, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 0.2, "out": 2.2}, {"src": "v1", "in": 3.2, "out": 5.2, "voice": "broadcast"}]}
+    rep = render(edl, job, "edl_voice", "--draft")
+    assert probe(rep["output"])["audio"]

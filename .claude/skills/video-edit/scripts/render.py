@@ -229,13 +229,18 @@ def prepare_narration(edl: dict, work: Path):
     nar = edl.get("narration")
     if not nar or not nar.get("items"):
         return
-    from tts import caption_chunks, synth
+    from tts import caption_chunks, load_config, synth
+    job = work.parent if (work.parent / "tts.json").exists() else work.parent.parent  # auto/ EDLs
+    cfg = load_config(job if (job / "tts.json").exists() else work.parent)
+    if isinstance(nar.get("provider"), dict):  # per-EDL override, e.g. {"provider": "openai", ...}
+        cfg = {**cfg, **nar["provider"]} if nar["provider"].get("provider") in (None, cfg.get("provider")) \
+            else dict(nar["provider"])
     sub = edl.setdefault("subtitles", {"enabled": True, "from": "manual"})
     if sub.get("enabled") is False and nar.get("captions", True):
         sub.update({"enabled": True, "from": "manual"})
     for it in nar["items"]:
         path, dur = synth(it["text"], work / "tts", it.get("voice", nar.get("voice")),
-                          it.get("rate", nar.get("rate")))
+                          it.get("rate", nar.get("rate")), cfg)
         it["_path"], it["_dur"] = str(path), dur
         if nar.get("captions", True):
             t0 = float(it.get("start", it.get("at", 0)))
@@ -291,7 +296,15 @@ def intro_of(clip: dict, fps: float):
     return spec, float(spec.get("at", 0.5)), max(1, round(float(spec.get("hold", 1.8)) * fps)) / fps
 
 
-AUDIO_KEYS = {"volume", "mute", "audio_lead", "audio_tail", "duck_music", "transition", "audio_filter"}
+AUDIO_KEYS = {"volume", "mute", "audio_lead", "audio_tail", "duck_music", "transition", "audio_filter", "voice"}
+# speech clean-up presets ("voice" on a clip, or "audio": {"voice": ...} for the whole edit)
+VOICE = {
+    "denoise": "highpass=f=70,afftdn=nf=-30:tn=1",
+    "clean": "highpass=f=80,afftdn=nf=-25:tn=1,deesser=i=0.4,"
+             "acompressor=threshold=0.1:ratio=3:attack=5:release=80:makeup=1.5",
+    "broadcast": "highpass=f=90,afftdn=nf=-25:tn=1,equalizer=f=3000:t=q:w=1.2:g=3,deesser=i=0.5,"
+                 "acompressor=threshold=0.08:ratio=4:attack=3:release=60:makeup=2",
+}
 
 
 def render_clip(i: int, clip: dict, ctx: dict) -> dict:
@@ -441,7 +454,7 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
     akey = hashlib.sha1(json.dumps({"p": clip["path"], "a": a, "b": b, "s": speed, "v": clip.get("volume", 1.0),
                                     "l": lead_src, "t": tail_src, "r": reverse, "fz": fz,
                                     "fx": [e for e in clip.get("effects", []) if e.get("type") in ("fade_in", "fade_out")],
-                                    "intro": intro_of(clip, ctx["fps"]), "af": clip.get("audio_filter"), "ver": 2},
+                                    "intro": intro_of(clip, ctx["fps"]), "af": clip.get("audio_filter"), "voice": clip.get("voice", ctx.get("voice")), "ver": 2},
                                    sort_keys=True).encode()).hexdigest()[:12]
     aout = ctx["clip_dir"] / f"a{i:03d}_{akey}.wav"
     intro = intro_of(clip, ctx["fps"])
@@ -453,6 +466,11 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
             af.append("areverse")
         if speed != 1.0:
             af += atempo_chain(speed)
+        voice = clip.get("voice", ctx.get("voice"))
+        if voice:
+            if voice not in VOICE:
+                raise SystemExit(f"unknown voice preset {voice!r}; options: {', '.join(VOICE)}")
+            af.append(VOICE[voice])
         af.append(f"volume={float(clip.get('volume', 1.0))}")
         if clip.get("audio_filter"):
             af.append(clip["audio_filter"])
@@ -906,6 +924,7 @@ def main():
 
     ctx = {"W": W, "H": H, "fps": fps, "grade": edl.get("grade", "none"), "fit": o.get("fit", "crop"), "font": o.get("font"),
            "bg": o.get("bg", "black"), "clip_dir": clip_dir, "probe": cprobe,
+           "voice": edl.get("audio", {}).get("voice"),
            "clip_q": 26 if args.draft else 16, "clip_preset": "ultrafast" if args.draft else "veryfast"}
 
     for c in edl["clips"]:
@@ -919,6 +938,8 @@ def main():
         if not snd.get("sfx"):
             snd["path"] = resolve_src(snd.get("src") or snd["path"], analysis, base)
 
+    from brand import apply_brand
+    apply_brand(edl, base)
     prepare_narration(edl, work)
     snap_intros_to_pauses(edl, analysis)
     apply_beat_sync(edl, analysis, base)

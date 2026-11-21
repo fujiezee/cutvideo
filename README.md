@@ -32,7 +32,9 @@ scripts are in [`examples/tears-of-steel/`](examples/tears-of-steel/).
   otherwise)
 - Face recognition uses OpenCV's YuNet and SFace models (~38 MB, downloaded once to
   `~/.cache/video-edit/models`)
-- Voice-over uses the system text-to-speech: macOS `say`, or `espeak-ng` on Linux
+- Voice-over uses the system text-to-speech (macOS `say`, or `espeak-ng` on Linux) unless
+  an API provider is configured in `tts.json` (OpenAI-compatible or any HTTP API, set per
+  language; see `.claude/skills/video-edit/tts.example.json`)
 
 ```bash
 pip3 install --user numpy opencv-python Pillow faster-whisper
@@ -108,6 +110,12 @@ python3 $S/render.py edits/demo/edl.json           # final
   lets the editor name them; cast intros and recaps use it
 - **Voice-over:** narration spoken by the system voice, captioned, with music ducking under
   it; narrated "one-minute recap" drafts from a script
+- **Speech clean-up:** noise reduction, de-essing and compression presets; filler words
+  ("um", "uh") cut out of talking-head drafts
+- **Covers:** thumbnails for 16:9, 9:16, 3:4 and 1:1 from the main characters' best frames,
+  with a 3D title
+- **Brand:** product signature on the end card, optional logo watermark, palette and font
+  from `brand.json`
 - **Auto drafts:** one command cuts first drafts of several styles from the same footage,
   renders and checks them, and lays them side by side for review
 

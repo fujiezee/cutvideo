@@ -22,6 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import ffmpeg, fmt_ts, load_json, log, save_json  # noqa: E402
 from styles import catalogue, features  # noqa: E402
+from brand import load_brand  # noqa: E402
+from tts import load_config as load_tts_config  # noqa: E402
 
 TAPE = "highpass=f=180,lowpass=f=4500"
 GRAMOPHONE = "highpass=f=250,lowpass=f=3200"
@@ -274,6 +276,7 @@ def r_cast_people(f, P, o, W=1920, H=1080):
         sw, sh = dims[s["vid"]]
         clips.append({"src": s["vid"], "in": a0, "out": b0, "volume": 0.6,
                       "effects": [{"type": "intro", "at": round(a["t"] - a0, 3), "hold": 1.6,
+                                   "color": o["palette"][(k - 1) % len(o["palette"])],
                                    "name": p["name"] or f"人物 {k:02d}", "role": p["role"] or "CHARACTER",
                                    "index": f"{k:02d}", "bg": "bw",
                                    "box": _pad_box(person_box(a["box"]), sw, sh, W, H)}]})
@@ -475,7 +478,7 @@ def r_recap(f, P, o):
     texts = [{"text": o["title"], "clip": 0, "start": 0.2, "end": 1.5, "style": "card"}]
     for i, raw in enumerate(script):
         line, rng = parse_script_line(raw)
-        _, dur = synth(line, o["tts_dir"], o.get("voice"), o.get("rate"))
+        _, dur = synth(line, o["tts_dir"], o.get("voice"), o.get("rate"), o["tts_config"])
         if rng:  # the editor said where this beat is in the source and/or who should be seen
             part = shots
             if rng["range"]:
@@ -556,6 +559,9 @@ def build(style, f, an_path: Path, auto_dir: Path, o) -> tuple[Path | None, list
         return None, notes
     out = edl["output"]
     tag = ASPECT.get((out["width"], out["height"]), f"{out['width']}x{out['height']}")
+    if o.get("brand", True):
+        edl["brand"] = True
+
     def rel(p):
         return os.path.relpath(Path(p).resolve(), auto_dir.resolve())
 
@@ -629,6 +635,7 @@ def main():
     ap.add_argument("--script", default=None, help="recap narration: text file, one sentence per line")
     ap.add_argument("--voice", default=None, help="tts voice (tts.py --voices)")
     ap.add_argument("--rate", type=int, default=None, help="tts speaking rate (words per minute)")
+    ap.add_argument("--no-brand", action="store_true", help="no product signature on the end card")
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--no-render", action="store_true")
     a = ap.parse_args()
@@ -650,7 +657,8 @@ def main():
     script = ([ln.strip() for ln in Path(a.script).read_text(encoding="utf-8").splitlines() if ln.strip()]
               if a.script else [])
     o = {"music": music, "title": title, "credit": a.credit, "videos": an["videos"], "script": script,
-         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts"}
+         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "brand": not a.no_brand,
+         "palette": load_brand(job)["colors"], "tts_config": load_tts_config(job)}
     auto_dir.mkdir(exist_ok=True)
     (job / "out").mkdir(exist_ok=True)
     score = {s["key"]: s["score"] for s in ranked}

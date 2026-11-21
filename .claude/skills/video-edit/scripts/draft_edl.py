@@ -27,13 +27,47 @@ def out_size(fmt: str, v0: dict):
     return (1080, 1920) if v0["height"] > v0["width"] else (1920, 1080)
 
 
-def jumpcut(an: dict, pad=0.12, min_gap=0.3, min_len=0.45):
+FILLERS = {"um", "uh", "umm", "uhm", "uhh", "erm", "er", "ah", "hmm", "mm", "mhm",
+           "嗯", "呃", "额", "唔", "啊", "嗯嗯"}
+
+
+def is_filler(word: str) -> bool:
+    w = word.strip().strip(".,!?;:，。！？、…").lower()
+    return w in FILLERS
+
+
+def speech_spans_without_fillers(words: list[dict], pad=0.08, gap=0.35) -> list[list[float]]:
+    """Spans of consecutive real words; a filler word or a pause longer than `gap` splits a
+    span, and the filler itself is left out."""
+    spans, cur = [], None
+    for w in words:
+        if is_filler(w["word"]):
+            if cur:
+                spans.append(cur)
+            cur = None
+            continue
+        if cur and w["start"] - cur[1] <= gap:
+            cur[1] = w["end"]
+        else:
+            if cur:
+                spans.append(cur)
+            cur = [w["start"], w["end"]]
+    if cur:
+        spans.append(cur)
+    return [[max(0.0, a - pad), b + pad] for a, b in spans]
+
+
+def jumpcut(an: dict, pad=0.12, min_gap=0.3, min_len=0.45, drop_fillers=False):
     clips = []
     for v in an["videos"]:
         spans = v["audio"].get("speech_spans") or []
         if not spans and not v.get("transcript"):
             continue  # no speech: B-roll, leave it for Claude to place as cutaways
-        if v.get("transcript") and v["transcript"]["segments"]:  # prefer ASR timings
+        if drop_fillers and v.get("transcript"):  # word level: cut "um"/"嗯" out of the line
+            words = [w for s in v["transcript"]["segments"] for w in s.get("words", [])]
+            spans = speech_spans_without_fillers(words)
+            pad = 0.0
+        elif v.get("transcript") and v["transcript"]["segments"]:  # prefer ASR timings
             spans = [[s["start"], s["end"]] for s in v["transcript"]["segments"]]
         merged = []
         for a, b in spans:
@@ -90,6 +124,9 @@ def main():
     ap.add_argument("--music", default=None)
     ap.add_argument("--title", default=None)
     ap.add_argument("--grade", default="natural")
+    ap.add_argument("--drop-fillers", action="store_true",
+                    help="jumpcut: cut filler words (um/uh/嗯/呃) out; analyse with --verbatim so they are transcribed")
+    ap.add_argument("--voice", default="clean", help="speech clean-up preset for jumpcut: clean|denoise|broadcast|none")
     a = ap.parse_args()
 
     an = load_json(a.analysis)
@@ -113,7 +150,9 @@ def main():
         edl["music"].append({"path": str(Path(a.music).resolve()), "volume": 0.35 if a.mode == "jumpcut" else 0.9,
                              "duck": a.mode == "jumpcut", "fade_in": 0.5, "fade_out": 2.0})
     if a.mode == "jumpcut":
-        edl["clips"] = jumpcut(an)
+        edl["clips"] = jumpcut(an, drop_fillers=a.drop_fillers)
+        if a.voice != "none":
+            edl["audio"] = {"voice": a.voice}
         edl["subtitles"] = {"enabled": True, "style": "caption", "max_chars": 14 if H > W else 22}
     else:
         edl["clips"] = montage(an, a.duration, beat)

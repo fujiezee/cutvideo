@@ -38,5 +38,6 @@ def check_shots(clips, analysis="work/analysis.json", tol=0.06, edge=0.4):
 
 
 def write(edl, name):
+    edl.setdefault("brand", True)  # "Made with cutvideo" on the end card
     Path(name).write_text(json.dumps(edl, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"wrote {name}: {len(edl['clips'])} clips")
