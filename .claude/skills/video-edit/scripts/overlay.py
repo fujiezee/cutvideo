@@ -33,6 +33,9 @@ STYLES = {
                     "anim": "pop"},
     "stamp":       {"font": "mono", "size": 0.042, "color": "#FFFFFF", "shadow": True, "pos": "bottom_left",
                     "align": "left"},
+    "text3d":      {"weight": "bold", "size": 0.13, "color": "#FFFFFF", "gradient": ["#FFFFFF", "#FFD36B"],
+                    "depth": 0.16, "extrude_color": "#8A5A12", "extrude_angle": 60, "pos": "center",
+                    "anim": "flip_in", "anim_in": 0.7, "anim_out": 0.3, "tracking": 0.04},
     "quote":       {"size": 0.065, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.04, "pos": "center", "anim": "typewriter", "shadow": True},
 }
 
@@ -230,9 +233,73 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
             img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(size * 0.06)))
             d = ImageDraw.Draw(img)
         _draw_line(d, x, y, line, font, colors, stroke, stroke_fill, track, boxes)
+    if st.get("gradient"):  # face filled with a vertical gradient (e.g. white -> gold)
+        c0, c1 = _rgba(st["gradient"][0]), _rgba(st["gradient"][1])
+        grad = Image.new("RGBA", img.size)
+        gd = ImageDraw.Draw(grad)
+        for yy in range(img.height):
+            t_ = yy / max(img.height - 1, 1)
+            gd.line([(0, yy), (img.width, yy)], fill=tuple(int(c0[i] + (c1[i] - c0[i]) * t_) for i in range(4)))
+        grad.putalpha(img.getchannel("A"))
+        img = grad
+    if st.get("depth"):  # extruded 3D letters: shaded copies stacked behind the face
+        img = _extrude(img, size, st)
     if st.get("rotate"):
         img = img.rotate(float(st["rotate"]), resample=Image.BICUBIC, expand=True)
     return img
+
+
+def _extrude(face: Image.Image, size: int, st: dict) -> Image.Image:
+    depth = max(2, int(size * float(st["depth"])))
+    ang = math.radians(float(st.get("extrude_angle", 55)))  # direction the sides go (screen space)
+    dx, dy = math.cos(ang), math.sin(ang)
+    side = _rgba(st.get("extrude_color", "#3A3A3A"))
+    W_, H_ = face.width + int(abs(dx) * depth) + 2, face.height + int(abs(dy) * depth) + 2
+    ox, oy = (int(-dx * depth) if dx < 0 else 0), (int(-dy * depth) if dy < 0 else 0)
+    out = Image.new("RGBA", (W_, H_), (0, 0, 0, 0))
+    mask = face.getchannel("A")
+    for k in range(depth, 0, -1):  # far to near; nearer slices lighter (simple lighting)
+        lum = 0.55 + 0.45 * (1 - k / depth)
+        col = tuple(int(c * lum) for c in side[:3]) + (255,)
+        layer = Image.new("RGBA", face.size, col)
+        layer.putalpha(mask)
+        out.alpha_composite(layer, (ox + int(dx * k), oy + int(dy * k)))
+    if st.get("shadow3d", True):  # soft contact shadow under the block
+        sh = Image.new("RGBA", out.size, (0, 0, 0, 0))
+        sm = Image.new("RGBA", face.size, (0, 0, 0, 120))
+        sm.putalpha(mask.point(lambda v: v * 120 // 255))
+        sh.alpha_composite(sm, (ox + int(dx * depth * 1.4), oy + int(dy * depth * 1.4)))
+        out = Image.alpha_composite(sh.filter(ImageFilter.GaussianBlur(size * 0.08)), out)
+    out.alpha_composite(face, (ox, oy))
+    return out
+
+
+def _perspective(img: Image.Image, ry: float = 0.0, rx: float = 0.0, focal: float = 2.2) -> Image.Image:
+    """Rotate a flat layer around its vertical (ry) / horizontal (rx) axis, degrees, with
+    perspective; returns a new RGBA image (bounding box of the projected quad)."""
+    if abs(ry) < 0.05 and abs(rx) < 0.05:
+        return img
+    import numpy as np
+    w, h = img.size
+    F = focal * max(w, h)
+    a, b = math.radians(ry), math.radians(rx)
+    pts = []
+    for x, y in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)):
+        x1, z1 = x * math.cos(a), x * math.sin(a)          # around Y
+        y1, z2 = y * math.cos(b) - z1 * math.sin(b), y * math.sin(b) + z1 * math.cos(b)  # around X
+        k = F / (F + z2)
+        pts.append((x1 * k, y1 * k))
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    minx, miny = min(xs), min(ys)
+    ow, oh = int(math.ceil(max(xs) - minx)) + 2, int(math.ceil(max(ys) - miny)) + 2
+    dst = [(px - minx + 1, py - miny + 1) for px, py in pts]
+    src = [(0, 0), (w, 0), (w, h), (0, h)]
+    A, B = [], []
+    for (X, Y), (u, v) in zip(dst, src):  # solve output->input homography
+        A += [[X, Y, 1, 0, 0, 0, -u * X, -u * Y], [0, 0, 0, X, Y, 1, -v * X, -v * Y]]
+        B += [u, v]
+    coef = np.linalg.solve(np.array(A, float), np.array(B, float))
+    return img.transform((max(ow, 1), max(oh, 1)), Image.PERSPECTIVE, tuple(coef), Image.BICUBIC)
 
 
 def _anchor(item, W, H, w, h, vertical):
@@ -255,7 +322,7 @@ def _ease_out_back(p):
 
 
 def _anim_state(item, t):
-    """Return (alpha, scale, dy_fraction, reveal) for item at absolute time t."""
+    """Return (alpha, scale, dy_fraction, reveal, rot_y, rot_x) for item at absolute time t."""
     st = {**STYLES.get(item.get("style", "caption"), {}), **item}
     anim = st.get("anim", "none")
     s, e = float(item["start"]), float(item["end"])
@@ -277,7 +344,16 @@ def _anim_state(item, t):
     if anim == "typewriter":
         tw = min(float(st.get("type_time", 0.06 * len(str(item["text"])))), (e - s) * 0.6)
         reveal = min(max((t - s) / max(tw, 0.01), 0), 1)
-    return alpha, scale, dy, reveal
+    ry, rx = float(st.get("rotate_y", 0)), float(st.get("rotate_x", 0))
+    if anim == "flip_in":  # swings in around the vertical axis, settles with a slight overshoot
+        q = _ease_out_back(p_in)
+        ry += (1 - q) * float(st.get("flip", 80))
+        alpha = min(1.0, p_in * 3, p_out)
+        scale = 0.85 + 0.15 * min(q, 1.0)
+    if anim == "swing":  # slow 3D sway for the whole duration
+        ry += float(st.get("swing", 12)) * math.sin(2 * math.pi * (t - s) / float(st.get("period", 4.0)))
+        alpha = min(p_in, p_out)
+    return alpha, scale, dy, reveal, ry, rx
 
 
 def _kara_index(item, t):
@@ -307,7 +383,7 @@ def _anim_breaks(item, fps):
     if anim == "none":
         return pts
     step = 1.0 / fps
-    if anim == "zoom":  # continuous motion: one frame per output frame
+    if anim in ("zoom", "swing"):  # continuous motion: one frame per output frame
         k = 1
         while s + k * step < e:
             pts.add(round(s + k * step, 4))
@@ -396,7 +472,7 @@ def build_layer(texts, images, W, H, fps, total, out_dir: Path, font=None, scale
         for kind, it in items:
             if not (it["start"] <= tm < it["end"]):
                 continue
-            alpha, sc, dy, reveal = _anim_state(it, tm)
+            alpha, sc, dy, reveal, ry, rx = _anim_state(it, tm)
             if alpha <= 0.01:
                 continue
             ki = _kara_index(it, tm) if kind == "text" else None
@@ -407,8 +483,17 @@ def build_layer(texts, images, W, H, fps, total, out_dir: Path, font=None, scale
                 blk = static_cache[key]
             else:
                 blk = img_cache[id(it)]
+            if abs(ry) > 0.05 or abs(rx) > 0.05:
+                c0 = blk.size
+                blk = _perspective(blk, ry, rx)
+                bw, bh = c0  # anchor on the unrotated size so the block turns in place
+                x, y = _anchor(it, W, H, bw, bh, vertical)
+                x += (bw - blk.width) // 2
+                y += (bh - blk.height) // 2
+            else:
+                bw, bh = blk.size
+                x, y = _anchor(it, W, H, bw, bh, vertical)
             bw, bh = blk.size
-            x, y = _anchor(it, W, H, bw, bh, vertical)
             if abs(sc - 1) > 0.0005:
                 nb = blk.resize((max(1, int(bw * sc)), max(1, int(bh * sc))), Image.BICUBIC)
                 x += (bw - nb.width) // 2
@@ -418,7 +503,7 @@ def build_layer(texts, images, W, H, fps, total, out_dir: Path, font=None, scale
                 blk = blk.copy()
                 blk.putalpha(blk.getchannel("A").point(lambda v, al=alpha: int(v * al)))
             canvas.alpha_composite(blk, (max(0, x), max(0, int(y + dy * H))))
-            sig.append((id(it), round(alpha, 3), round(sc, 4), round(dy, 4), round(reveal, 3), ki))
+            sig.append((id(it), round(alpha, 3), round(sc, 4), round(dy, 4), round(reveal, 3), ki, round(ry, 2), round(rx, 2)))
         h = hashlib.md5(repr(sig).encode()).hexdigest()
         if entries and h == last_hash:
             entries[-1][1] += b - a

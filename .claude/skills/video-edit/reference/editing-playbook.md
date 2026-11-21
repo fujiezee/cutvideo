@@ -106,6 +106,16 @@ Worked examples with plans and build scripts: `examples/tears-of-steel/` in the 
 - **Beat-sync vertical mix**: 9:16 `fit: crop` + `focus: auto`, `beat_sync` every beat with
   `shift: auto`, hook text in the first second, accents on ~1 cut in 5.
 
+## 3D titles and light effects
+
+- Title opener: a calm wide shot (`styles.py` lists them), `text3d` title with `flip_in`, a
+  small `card` subtitle with wide tracking, `particles` overlay for depth, a `boom` on the
+  title.
+- Name or theme behind a person: `text_behind` on a static medium/close shot, 3-5 s, big
+  text (size 0.25-0.35) placed where the head overlaps it.
+- Sci-fi / tech moments: `hologram` beside a screen or a person, `grid` under neon shots,
+  `streaks` across fast action; one effect per shot, a few shots per video.
+
 ## Multi-camera / multiple takes of the same moment
 
 Match moments by transcript text or by visual content, keep the best-framed angle for each

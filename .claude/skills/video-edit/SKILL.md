@@ -1,6 +1,6 @@
 ---
 name: video-edit
-description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros and word-by-word (karaoke) captions. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "edit this video", "make a montage", "make a trailer", "cut this down".
+description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "edit this video", "make a montage", "make a trailer", "cut this down".
 ---
 
 # Video edit
@@ -54,6 +54,20 @@ segments with word timings, and for music `bpm`, `beats`, `strong_beats`, `drops
 Fix ASR mistakes before captioning: misheard words go in `subtitles.replace`; missing or
 mistimed words are corrected in `analysis.json` itself (keep a copy of the original). Check
 names, numbers and any word the captions will highlight.
+
+### 2b. When asked what the footage can become: the style menu
+
+```bash
+python3 $S/styles.py $J/work/analysis.json [--exclude 588-708 v2:0-5]
+```
+
+Writes `work/styles.md`: footage features (dialogue density, quotable lines, action, faces,
+close-ups, static portraits, calm wide shots, dark/neon shots, music-like audio) and a score
+per style with reasons, supporting shots and gaps. First look at the sheets and exclude
+credits, slates and test footage (`--exclude`, seconds). Then check the top styles against
+what you saw, drop or add styles by judgment, and present the menu: per style one line of
+"what it would be" (story / look), format and length, and what is missing. Offer to cut
+several; each chosen style then gets its own plan (step 3).
 
 ### 3. Design the edit: write `$J/plan.md` before any EDL
 
@@ -199,6 +213,11 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   separated from the background (medium shot, face visible).
 - Karaoke captions (`subtitles.karaoke`) need accurate word timings: fix the transcript
   first; captions with no word timings spread their words evenly.
+- 3D: `text3d` style (extruded, gradient face, `flip_in` / `swing`, `rotate_x/y`) for titles;
+  `text_behind` clip effect puts big text between background and person (rembg per frame,
+  ~0.7 s/frame: keep it to 3-5 s on static shots); `overlays` add three.js light effects
+  (`particles`, `hologram`, `streaks`, `grid`) rendered by headless Chrome and keyed by
+  brightness, so they add light like a screen blend. Use them as accents, not on every shot.
 - Prefer anchoring texts and manual captions to clips (`"clip": i` with `start`/`end`, or
   `src_start`/`src_end` in source seconds) over absolute output times: they stay correct
   when clips are trimmed, reordered or transitions change.

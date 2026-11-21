@@ -1,6 +1,6 @@
 # Example edits: Tears of Steel
 
-Eight edits of the Blender Foundation short film *Tears of Steel* (2012), each in a
+Nine edits of the Blender Foundation short film *Tears of Steel* (2012), each in a
 different style, all made with the `video-edit` skill. Download the finished videos from the
 [showcase release](https://github.com/fujiezee/cutvideo/releases/tag/showcase-v1).
 
@@ -18,6 +18,7 @@ an attribution card.
 | Retro VHS | 4:3 | 0:39 | [vhs.md](plans/vhs.md) | [build_vhs.py](build/build_vhs.py) |
 | Silent film | 4:3 | 0:46 | [silent.md](plans/silent.md) | [build_silent.py](build/build_silent.py) |
 | Cyberpunk glitch | 16:9 | 0:41 | [cyberpunk.md](plans/cyberpunk.md) | [build_cyberpunk.py](build/build_cyberpunk.py) |
+| 3D titles and effects | 16:9 | 0:22 | [3d.md](plans/3d.md) | [build_3d.py](build/build_3d.py) |
 
 ## Reproduce
 

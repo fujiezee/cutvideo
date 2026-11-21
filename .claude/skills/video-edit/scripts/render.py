@@ -283,6 +283,9 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     if any(e.get("type") == "intro" for e in effects):
         import intro as _intro
         iv = f"{_intro.VERSION}-{_intro.backend()}"  # re-render when the cut-out backend changes
+    if any(e.get("type") == "text_behind" for e in effects):
+        import behind as _bh
+        iv = f"{iv}-behind{_bh.VERSION}"
     if clip.get("focus") == "track":
         import reframe as _rf
         iv = f"{iv}-track{_rf.VERSION}"
@@ -386,6 +389,9 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     tmp = out.with_name(out.stem + ".part.mp4")
     ffmpeg([*inputs, "-filter_complex", f"[0:v]{','.join(vf)}[v]", "-map", "[v]", "-an",
             "-frames:v", str(nframes), *enc, str(tmp)])
+    for tb in [e for e in effects if e.get("type") == "text_behind"]:
+        from behind import apply_text_behind
+        apply_text_behind(tmp, tb, fps, ctx["clip_dir"] / f"behind{i:03d}", enc, ctx.get("font"))
     intro = intro_of(clip, fps)
     if intro:
         from intro import apply_intro
@@ -964,7 +970,34 @@ def main():
     if texts or images:
         layer_list = ovl.build_layer(texts, images, W, H, fps, total, work / "layer", font=o.get("font"),
                                      scale=scale)
-    vin = len(rendered)
+    vin = sum(1 for x in inputs if x == "-i")
+    # three.js / alpha video overlays: above the picture, below the text layer
+    for k, ov in enumerate(edl.get("overlays", [])):
+        if "clip" in ov:
+            seg = timeline[int(ov["clip"])]
+            t0 = seg["out_start"] + float(ov.get("start", 0))
+            t1 = seg["out_start"] + float(ov["end"]) if "end" in ov else seg.get("vis_end", seg["out_end"])
+        else:
+            t0, t1 = float(ov.get("start", 0)), float(ov.get("end", total))
+        t1 = min(t1, total)
+        if t1 - t0 < 0.05:
+            continue
+        if ov.get("fx"):
+            from fx3d import render_fx
+            src = render_fx(ov["fx"], ov.get("params", {}), W, H, fps, t1 - t0, work / "fx")
+        else:
+            src = resolve_src(ov["path"], None, base)
+        inputs += ["-i", str(src)]
+        op = float(ov.get("opacity", 1.0))
+        fade = float(ov.get("fade", 0.3))
+        chain = (f"[{vin}:v]format=rgba,fps={fps},trim=duration={t1 - t0:.3f},"
+                 f"fade=t=out:st={max(t1 - t0 - fade, 0):.3f}:d={fade}:alpha=1,"
+                 + (f"colorchannelmixer=aa={op}," if op < 1 else "")
+                 + f"setpts=PTS-STARTPTS+{t0:.3f}/TB[ovl{k}]")
+        parts.append(chain)
+        parts.append(f"{cur_v}[ovl{k}]overlay=0:0:eof_action=pass:format=auto[vov{k}]")
+        cur_v = f"[vov{k}]"
+        vin += 1
     if layer_list:
         inputs += ["-f", "concat", "-safe", "0", "-i", str(layer_list)]
         parts.append(f"[{vin}:v]format=rgba,setpts=PTS-STARTPTS[lay]")

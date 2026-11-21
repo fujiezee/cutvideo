@@ -106,6 +106,20 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
 | `flicker` | `amount` 0.05 | old-projector brightness flicker |
 | `intro` | see below | freeze-frame character intro (name card) |
 
+| `text_behind` | see below | big text between the background and the person |
+
+### Text behind a person (`text_behind` effect)
+
+```json
+{"type": "text_behind", "text": "CELIA", "start": 0.3, "end": 4.0, "style": "text3d", "size": 0.3,
+ "pos": [0.5, 0.4], "anim": "flip_in"}
+```
+
+Times are clip seconds; any text style and animation works. Each frame in the range gets a
+person mask (rembg, temporally smoothed), and the frame is rebuilt as background → text →
+person. Needs `rembg`; about 0.7 s per frame. Best on static or slow shots (the text does
+not track camera moves); all people in frame stand in front of the text.
+
 ### Character intro (`intro` effect)
 
 ```json
@@ -173,6 +187,11 @@ that is visible (up to the midpoint of its transitions).
 - `size`: ≤ 1 = fraction of the frame's short side; > 1 = pixels at full resolution.
 - `anim`: `none`, `fade`, `pop`, `slide_up`, `typewriter`, `zoom` (`anim_in`, `anim_out`,
   `type_time`, `zoom` = push-in amount, default 0.08).
+- `text3d` style and 3D keys: `depth` (extrusion, fraction of size), `extrude_color`,
+  `extrude_angle` (degrees, screen direction of the sides), `gradient` [top, bottom] face
+  colours, `shadow3d`, `rotate_y` / `rotate_x` (static perspective, degrees); animations
+  `flip_in` (swings in around the vertical axis, `flip` degrees) and `swing` (`swing`
+  degrees, `period` seconds).
 - `tracking`: letter spacing as a fraction of the font size (0.1-0.3 for titles).
 - `weight`: `bold` uses a bold CJK-capable face (default for `caption`, `title`,
   `highlight`, `tag`, `card`); `font` may name a face inside a collection as `path.ttc#index`,
@@ -220,6 +239,28 @@ Transcript words are mapped through every clip's `in/out/speed` onto the output 
 
 `width` ≤ 1 = fraction of frame width. `end: null` = until the end.
 Built-in full-frame overlay: `{"preset": "scanlines", "opacity": 0.22}` (CRT / VHS lines).
+
+## overlays
+
+Three.js light effects or any alpha video above the picture and below the text:
+
+```json
+"overlays": [{"fx": "particles", "clip": 0, "start": 0, "params": {"color": "#FFB25C", "count": 320}},
+             {"fx": "hologram", "clip": 2, "params": {"pos": [0.76, 0.45], "scale": 0.8}},
+             {"fx": "streaks", "start": 9.7, "end": 13.2, "params": {"colors": ["#7FD4FF", "#FFB36B"]}},
+             {"fx": "grid", "clip": 5, "opacity": 0.85, "params": {"color": "#FF2BD6"}},
+             {"path": "my_alpha_layer.mov", "start": 3.0, "end": 6.0}]
+```
+
+- Placement like texts: `clip` + `start`/`end` (clip seconds) or absolute `start`/`end`.
+  `opacity`, `fade` (seconds, fade-out at the end).
+- `fx`: `particles` (glowing dust/embers drifting up; `color`, `count`, `speed`, `size`),
+  `hologram` (wireframe core, rings, scan line; `color`, `pos`, `scale`), `streaks`
+  (anamorphic light streaks; `colors`, `count`, `speed`), `grid` (neon perspective floor;
+  `color`, `speed`, `horizon`). Every fx takes `gain` (brightness, default 1.3).
+- Rendered once per parameters by headless Chrome (Node + puppeteer(-core); `CHROME_PATH`
+  overrides the browser) on black and keyed by brightness, so overlaying adds light like a
+  screen blend. Cached in `.render/fx/`.
 
 ## music
 
