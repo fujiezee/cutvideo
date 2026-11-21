@@ -26,6 +26,7 @@ STYLES = {
     "lower_third": {"size": 0.045, "color": "#FFFFFF", "box": "#000000B3", "pos": "lower_left", "anim": "slide_up", "align": "left"},
     "label":       {"size": 0.04, "color": "#111111", "box": "#FFFFFFE6", "pos": "top_left", "anim": "fade", "align": "left"},
     "tag":         {"size": 0.05, "color": "#FFFFFF", "box": "#FF2D55", "pos": "top", "anim": "pop"},
+    "card":        {"size": 0.062, "color": "#FFFFFF", "pos": "center", "anim": "zoom", "tracking": 0.14, "anim_in": 0.45, "anim_out": 0.35},
     "quote":       {"size": 0.065, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.04, "pos": "center", "anim": "typewriter", "shadow": True},
 }
 
@@ -64,13 +65,29 @@ def _tokens(text):
     return toks
 
 
-def _wrap(text, font, max_w, draw):
+def _line_w(draw, line, font, track=0.0):
+    return draw.textlength(line, font=font) + track * max(len(line) - 1, 0)
+
+
+def _draw_line(d, x, y, line, font, colors, stroke, stroke_fill, track):
+    """Draw one line; per-character colours and letter spacing supported."""
+    if not track and len(set(colors)) <= 1:
+        d.text((x, y), line, font=font, fill=colors[0] if colors else (255, 255, 255, 255),
+               stroke_width=stroke, stroke_fill=stroke_fill)
+        return
+    cx = x
+    for ch, col in zip(line, colors):
+        d.text((cx, y), ch, font=font, fill=col, stroke_width=stroke, stroke_fill=stroke_fill)
+        cx += d.textlength(ch, font=font) + track
+
+
+def _wrap(text, font, max_w, draw, track=0.0):
     lines = []
     for para in str(text).split("\n"):
         cur = ""
         for tk in _tokens(para):
             trial = cur + tk
-            if cur and draw.textlength(trial, font=font) > max_w:
+            if cur and _line_w(draw, trial, font, track) > max_w:
                 lines.append(cur.rstrip())
                 cur = tk.lstrip()
             else:
@@ -93,7 +110,7 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
     tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     max_w = int(W * float(st.get("max_width", 0.86)))
     text = str(st["text"])
-    lines = _wrap(text, font, max_w, tmp)
+    lines = _wrap(text, font, max_w, tmp, float(st.get("tracking", 0)) * size)
     if reveal < 1.0:  # typewriter: reveal a prefix
         total = sum(len(l) for l in lines)
         keep = int(round(total * reveal))
@@ -103,10 +120,11 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
             keep -= len(l)
         lines = out
     stroke = int(size * float(st.get("stroke", 0))) if st.get("stroke_color") else 0
+    track = float(st.get("tracking", 0)) * size  # extra letter spacing in px
     asc, desc = font.getmetrics()
     lh = int((asc + desc) * float(st.get("line_spacing", 1.12)))
-    full_lines = _wrap(text, font, max_w, tmp)
-    tw = max([tmp.textlength(l, font=font) for l in full_lines] + [1])
+    full_lines = _wrap(text, font, max_w, tmp, track)
+    tw = max([_line_w(tmp, l, font, track) for l in full_lines] + [1])
     pad = int(size * 0.35) if st.get("box") else 0
     bw, bh = int(tw + 2 * pad + 2 * stroke + 8), int(lh * len(full_lines) + 2 * pad + 2 * stroke + 8)
     img = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
@@ -115,29 +133,25 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
         d.rounded_rectangle([0, 0, bw - 1, bh - 1], radius=int(size * 0.25), fill=_rgba(st["box"]))
     align = st.get("align", "center")
     hl_words = st.get("highlight") or []
+    line_colors = st.get("line_colors") or []
+    stroke_fill = _rgba(st.get("stroke_color", "#000000"))
     for li, line in enumerate(lines):
-        lw = d.textlength(full_lines[li], font=font) if li < len(full_lines) else 0
+        lw = _line_w(d, full_lines[li], font, track) if li < len(full_lines) else 0
         x = pad + stroke + 4 + ((tw - lw) / 2 if align == "center" else (tw - lw) if align == "right" else 0)
         y = pad + stroke + 4 + li * lh
+        base = _rgba(line_colors[li] if li < len(line_colors) else st.get("color"))
+        hl = _rgba(st.get("highlight_color", "#FFE600"))
+        colors = [base] * len(line)
+        for w in hl_words:  # colour specific words/characters
+            for m in re.finditer(re.escape(w), line):
+                colors[m.start():m.end()] = [hl] * (m.end() - m.start())
         if st.get("shadow"):
             sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
-            ImageDraw.Draw(sh).text((x + size * 0.05, y + size * 0.07), line, font=font, fill=(0, 0, 0, 170),
-                                    stroke_width=stroke, stroke_fill=(0, 0, 0, 170))
+            _draw_line(ImageDraw.Draw(sh), x + size * 0.05, y + size * 0.07, line, font, [(0, 0, 0, 170)] * len(line),
+                       stroke, (0, 0, 0, 170), track)
             img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(size * 0.06)))
             d = ImageDraw.Draw(img)
-        if hl_words:  # colour specific words/characters
-            cx = x
-            segs = re.split("(" + "|".join(re.escape(w) for w in hl_words) + ")", line)
-            for sgm in segs:
-                if not sgm:
-                    continue
-                col = _rgba(st.get("highlight_color", "#FFE600")) if sgm in hl_words else _rgba(st.get("color"))
-                d.text((cx, y), sgm, font=font, fill=col, stroke_width=stroke,
-                       stroke_fill=_rgba(st.get("stroke_color", "#000")))
-                cx += d.textlength(sgm, font=font)
-        else:
-            d.text((x, y), line, font=font, fill=_rgba(st.get("color")), stroke_width=stroke,
-                   stroke_fill=_rgba(st.get("stroke_color", "#000000")))
+        _draw_line(d, x, y, line, font, colors, stroke, stroke_fill, track)
     if st.get("rotate"):
         img = img.rotate(float(st["rotate"]), resample=Image.BICUBIC, expand=True)
     return img
@@ -179,6 +193,9 @@ def _anim_state(item, t):
         alpha = min(1.0, p_in * 2.5, p_out)
     if anim == "slide_up":
         dy = (1 - (1 - (1 - p_in) ** 3)) * 0.04
+    if anim == "zoom":  # slow push-in for trailer cards
+        alpha = min(p_in, p_out)
+        scale = 1.0 + float(st.get("zoom", 0.08)) * min(max((t - s) / max(e - s, 0.01), 0), 1)
     if anim == "typewriter":
         tw = min(float(st.get("type_time", 0.06 * len(str(item["text"])))), (e - s) * 0.6)
         reveal = min(max((t - s) / max(tw, 0.01), 0), 1)
@@ -193,6 +210,12 @@ def _anim_breaks(item, fps):
     if anim == "none":
         return pts
     step = 1.0 / fps
+    if anim == "zoom":  # continuous motion: one frame per output frame
+        k = 1
+        while s + k * step < e:
+            pts.add(round(s + k * step, 4))
+            k += 1
+        return pts
     ain, aout = float(st.get("anim_in", 0.28)), float(st.get("anim_out", 0.18))
     if anim == "typewriter":
         ain = min(float(st.get("type_time", 0.06 * len(str(item["text"])))), (e - s) * 0.6)
@@ -277,7 +300,7 @@ def build_layer(texts, images, W, H, fps, total, out_dir: Path, font=None, scale
                 blk = img_cache[id(it)]
             bw, bh = blk.size
             x, y = _anchor(it, W, H, bw, bh, vertical)
-            if abs(sc - 1) > 0.01:
+            if abs(sc - 1) > 0.0005:
                 nb = blk.resize((max(1, int(bw * sc)), max(1, int(bh * sc))), Image.BICUBIC)
                 x += (bw - nb.width) // 2
                 y += (bh - nb.height) // 2
@@ -286,7 +309,7 @@ def build_layer(texts, images, W, H, fps, total, out_dir: Path, font=None, scale
                 blk = blk.copy()
                 blk.putalpha(blk.getchannel("A").point(lambda v, al=alpha: int(v * al)))
             canvas.alpha_composite(blk, (max(0, x), max(0, int(y + dy * H))))
-            sig.append((id(it), round(alpha, 2), round(sc, 2), round(dy, 3), round(reveal, 3)))
+            sig.append((id(it), round(alpha, 3), round(sc, 4), round(dy, 4), round(reveal, 3)))
         h = hashlib.md5(repr(sig).encode()).hexdigest()
         if entries and h == last_hash:
             entries[-1][1] += b - a

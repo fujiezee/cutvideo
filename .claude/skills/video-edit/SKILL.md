@@ -82,7 +82,7 @@ Write `$J/edl.json`. Full format: `reference/edl.md`. Minimal shape:
     {"src": "v1", "in": 3.2, "out": 7.9, "effects": [{"type": "zoom_in", "amount": 0.08}]},
     {"src": "v2", "in": 0.0, "out": 2.4, "transition": {"type": "fade", "duration": 0.3}}
   ],
-  "texts": [{"text": "标题", "start": 0.2, "end": 2.5, "style": "title"}],
+  "texts": [{"text": "Title", "start": 0.2, "end": 2.5, "style": "title"}],
   "subtitles": {"enabled": true, "style": "caption"},
   "music": [{"path": "song.mp3", "volume": 0.3, "duck": true}]
 }
@@ -104,6 +104,12 @@ change (heads cut off? use `focus` or `fit: "blur"`), text legibility and overla
 faces, subtitle accuracy (fix misheard words with `subtitles.replace`), black/frozen frames,
 pacing, grade consistency. Also re-read `$J/.render/subtitles.json` against the transcript.
 Fix and re-render. Do at least one review pass before reporting.
+
+You cannot hear the result, so verify audio by measurement: integrated loudness and true peak
+(`ffmpeg -i out.mp4 -af ebur128=peak=true -f null -`, target about -14 LUFS / ≤ -1 dBFS),
+momentary loudness at each dialogue line and hit (quiet dialogue needs more `volume`), and
+the `--plan` / `last_render.json` timeline against the music hits you targeted. Say in the
+handoff that the mix was checked by measurement, and ask the user to listen.
 
 ### 6. Deliver
 
@@ -134,6 +140,11 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   transitions ≤ 0.5 s and shorter than both neighbouring clips.
 - Captions come from the transcript and follow cuts and speed changes automatically; muted or
   reversed clips get none. Manual captions: `subtitles.items`.
+- Music-driven edits: set the bed's `offset` so its drop lands where you want, `beat_sync`
+  the action range, pin key moments with `start_at_music`, check with `--plan`. See the
+  trailer recipe in the playbook.
+- Synthesised SFX (`sounds` with `sfx`) need no sample files; keep them under the music
+  except on drops and the title.
 - Prefer anchoring texts and manual captions to clips (`"clip": i` with `start`/`end`, or
   `src_start`/`src_end` in source seconds) over absolute output times: they stay correct
   when clips are trimmed, reordered or transitions change.

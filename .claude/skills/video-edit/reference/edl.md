@@ -14,8 +14,9 @@ JSON. Paths are relative to the EDL file unless absolute.
 | `subtitles` | object | captions from the transcript and/or manual items |
 | `images` | array | logos / stickers / watermarks |
 | `music` | array | background music tracks |
-| `audio` | object | `clip_volume` (default 1.0): gain on the joined clip audio |
-| `beat_sync` | object | `{"music": 0, "every": 1}` snap cut points to beats of `music[0]` |
+| `sounds` | array | audio-only items: synthesised SFX or ranges of any file / source video |
+| `audio` | object | `clip_volume` (default 1.0): gain on all clip audio |
+| `beat_sync` | object | snap cut points to beats of a music track (see Timing) |
 
 ## output
 
@@ -41,6 +42,22 @@ Video clip:
 - `speed`: 0.25-4. Audio is time-stretched (pitch kept).
 - `focus`: crop centre for `fit: crop`, 0..1 (x, y). Use it to keep faces in a 9:16 crop.
 - `transition`: how this clip enters from the previous one. Omit for a hard cut.
+- `adjust`: per-clip colour correction applied before the shared grade, to match shots:
+  `{"temperature": 5600, "temperature_mix": 0.5, "brightness": 0.03, "contrast": 1.05,
+  "saturation": 0.9, "gamma": 1.0}` (temperature < 6500 warms, > 6500 cools).
+
+Audio of a clip (rendered as its own track, so it can extend past the picture):
+
+| key | meaning |
+|---|---|
+| `volume` | gain (raise quiet dialogue to 1.5-2.5) |
+| `mute` | drop the clip's audio |
+| `audio_lead` | J-cut: audio starts this many seconds before the picture (taken from the source before `in`) |
+| `audio_tail` | L-cut: audio continues this many seconds after the picture (from the source after `out`) |
+| `duck_music` | this clip's audio ducks `duck: true` music. If no clip sets it, all clip audio ducks |
+
+Transitions crossfade the clip audio automatically. Changing only audio keys does not
+re-encode the video.
 
 Generated clips:
 
@@ -79,14 +96,14 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
 ## Grades
 
 `none`, `natural`, `vivid`, `cinematic`, `teal_orange`, `warm`, `cool`, `moody`, `vintage`,
-`film`, `bw`, `fade`, `bright`, or `lut:/path/to/file.cube`.
+`film`, `bw`, `fade`, `bright`, `trailer`, or `lut:/path/to/file.cube`.
 
 ## texts
 
 ```json
-{"text": "第一站 · 京都", "start": 2.0, "end": 4.5, "style": "lower_third",
+{"text": "Kyoto", "start": 2.0, "end": 4.5, "style": "lower_third",
  "pos": "bottom_left", "size": 0.05, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.08,
- "box": "#00000099", "anim": "slide_up", "highlight": ["京都"], "highlight_color": "#FFE600",
+ "box": "#00000099", "anim": "slide_up", "highlight": ["Kyoto"], "highlight_color": "#FFE600",
  "align": "left", "max_width": 0.8, "rotate": 0, "shadow": true, "font": "/path.ttf"}
 ```
 
@@ -106,18 +123,22 @@ end). `src_start`/`src_end` are source-video seconds (e.g. word timings from the
 transcript), mapped through the clip's `in` and `speed` and clamped to the part of the clip
 that is visible (up to the midpoint of its transitions).
 
-- `style`: `caption`, `title`, `subtitle`, `highlight`, `lower_third`, `label`, `tag`, `quote`.
+- `style`: `caption`, `title`, `subtitle`, `highlight`, `lower_third`, `label`, `tag`, `quote`,
+  `card` (trailer interstitial: wide letter spacing, slow push-in).
 - `pos`: `center`, `top`, `bottom`, `left`, `right`, `top_left`, `top_right`, `bottom_left`,
   `bottom_right`, `lower_left`, `center_low`, `center_high`, `caption`, or `[x, y]` (0..1).
 - `size`: ≤ 1 = fraction of the frame's short side; > 1 = pixels at full resolution.
-- `anim`: `none`, `fade`, `pop`, `slide_up`, `typewriter` (`anim_in`, `anim_out`, `type_time`).
+- `anim`: `none`, `fade`, `pop`, `slide_up`, `typewriter`, `zoom` (`anim_in`, `anim_out`,
+  `type_time`, `zoom` = push-in amount, default 0.08).
+- `tracking`: letter spacing as a fraction of the font size (0.1-0.3 for titles).
+- `line_colors`: one colour per line, e.g. bilingual subtitles `["#FFFFFF", "#C8C8C8"]`.
 - `box`: background colour (`#RRGGBBAA` allowed). `\n` forces a line break.
 
 ## subtitles
 
 ```json
 {"enabled": true, "from": "transcript", "style": "caption", "max_chars": 14,
- "strip_punct": true, "replace": {"剪急": "剪辑"}, "highlight": ["关键"],
+ "strip_punct": true, "replace": {"misheard": "corrected"}, "highlight": ["key"],
  "items": [{"text": "manual caption", "start": 1.0, "end": 2.5}]}
 ```
 
@@ -139,9 +160,58 @@ Transcript words are mapped through every clip's `in/out/speed` onto the output 
 
 ```json
 {"path": "song.mp3", "start": 0, "end": null, "offset": 12.0, "volume": 0.3,
- "duck": true, "fade_in": 0.5, "fade_out": 2.0, "loop": true}
+ "duck": true, "duck_threshold": 0.03, "duck_ratio": 8, "duck_release": 400,
+ "fade_in": 0.5, "fade_out": 2.0, "loop": true}
 ```
 
+- `path`: a file, or a source id like `v1` (e.g. the film's own score from its credits).
 - `start`/`end`: where it sits on the output timeline; `offset`: where to start in the song.
-- `duck`: compress the music whenever clip audio (speech) is present.
+- `duck`: compress the music while dialogue plays (see `duck_music` on clips).
 - Montage with music only: set `audio.clip_volume` to 0-0.3 and music `volume` 0.8-1.0.
+- A music bed cut from a longer file: extract it to WAV first (`ffmpeg -ss A -to B -i src -vn
+  bed.wav`) and analyse it with `analyze.py --music bed.wav` to get its beats and energy.
+
+## sounds
+
+```json
+{"sfx": "boom", "clip": 12, "start": 0.0, "volume": 0.8, "params": {"duration": 4}}
+{"sfx": "riser", "clip": 33, "start": -3.0, "volume": 0.5}
+{"path": "v1", "in": 389.2, "out": 392.1, "at": 41.5, "volume": 1.0, "fade_in": 0.1, "fade_out": 0.2}
+```
+
+- Placement: `clip` + `start` (seconds from that clip's start, may be negative) or `at`
+  (output seconds). Sounds are not ducked.
+- `sfx` (synthesised, no samples needed): `boom` (big low impact with crack), `hit`
+  (short punch), `whoosh` (transition swish), `riser` (tension build, ends abruptly - put
+  its end on the hit), `swell` (reverse-cymbal lead-in), `sub_drop`, `tick`, `glitch`.
+  `params`: `duration`, `pitch`, `seed`.
+- `path`/`src` + `in`/`out`: any audio range, e.g. a line of dialogue laid over other shots.
+
+## Timing: beat sync, pins, planning
+
+```json
+"beat_sync": {"music": 0, "every": 2, "clips": [12, 30], "offset_beats": 1, "shift": -0.25}
+```
+
+- Snaps the visible cut at the end of each clip in `clips` (inclusive range) to the beat grid;
+  a transition's switch point is its midpoint. Clips with `"snap": false` keep their length
+  (dialogue). Colour/image clips change `duration`.
+- `every`: cut every N beats; `offset_beats`: which beat of the N to start on (parity);
+  `shift`: nudge the grid in seconds. Check the detected beats against the energy curve:
+  if hits fall half a beat before the beats, the detector locked onto off-beats (`shift`
+  = -half a beat).
+
+Pins land one clip on an exact moment, e.g. the title on a musical hit; the previous clip
+absorbs the difference:
+
+```json
+{"src": "v1", "in": 66.0, "out": 69.8, "start_at_music": 99.05}
+{"type": "color", "duration": 2, "start_at": 30.0}
+```
+
+`start_at_music` is seconds in the song (`pin_music`: index, default 0) and accounts for its
+`offset`/`start`. Pins are applied after beat sync.
+
+`render.py EDL --plan` prints the resolved timeline (after beat sync and pins) without
+rendering. Clips render to an exact frame count, so the plan matches the output to the frame.
+`.render/resolved_edl.json` holds the in/out points that were actually rendered.

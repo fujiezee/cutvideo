@@ -53,6 +53,7 @@ GRADES = {
     "bw": "hue=s=0,eq=contrast=1.15",
     "fade": "curves=all='0/0.08 0.5/0.5 1/0.94',eq=saturation=0.8",
     "bright": "eq=brightness=0.05:contrast=1.04:saturation=1.1:gamma=1.06",
+    "trailer": "colorbalance=rs=-0.05:bs=0.06:rh=0.06:bh=-0.05,eq=contrast=1.12:saturation=0.9:gamma=0.97",
 }
 
 
@@ -167,6 +168,8 @@ def effect_filters(effects: list[dict], W: int, H: int, dur: float, fps: float) 
 
 # ------------------------------------------------------------------ clip rendering
 
+AUDIO_KEYS = {"volume", "mute", "audio_lead", "audio_tail", "duck_music", "transition"}
+
 
 def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     W, H, fps = ctx["W"], ctx["H"], ctx["fps"]
@@ -178,8 +181,9 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     fit = clip.get("fit", ctx["fit"])
     focus = clip.get("focus", [0.5, 0.5])
 
-    key = hashlib.sha1(json.dumps({"c": clip, "W": W, "H": H, "fps": fps, "g": grade, "fit": fit,
-                                   "q": ctx["clip_q"], "v": 3}, sort_keys=True).encode()).hexdigest()[:12]
+    vclip = {k: v for k, v in clip.items() if k not in AUDIO_KEYS}  # audio tweaks must not re-encode video
+    key = hashlib.sha1(json.dumps({"c": vclip, "W": W, "H": H, "fps": fps, "g": grade, "fit": fit,
+                                   "q": ctx["clip_q"], "v": 5}, sort_keys=True).encode()).hexdigest()[:12]
     out = ctx["clip_dir"] / f"c{i:03d}_{key}.mp4"
 
     inputs, src_dur, has_audio = [], 0.0, False
@@ -204,8 +208,12 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     freeze = next((e for e in effects if e.get("type") == "freeze"), None)
     total = dur + (float(freeze.get("duration", 0.6)) if freeze else 0)
 
+    audio = None
+    if has_audio:
+        audio = render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze)
+
     if out.exists():
-        return {"path": str(out), "duration": probe(out)["duration"], "cached": True}
+        return {"path": str(out), "duration": probe(out)["duration"], "cached": True, "audio": audio}
 
     vf = []
     if "reverse" in names:
@@ -220,15 +228,22 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
         cw, ch = int(si["width"] * k) // 2 * 2, int(si["height"] * k) // 2 * 2
         vf.append(f"scale={cw}:{ch}:flags=lanczos")
         vf.append(f"fps={fps}")
-        efx_v, efx_a = effect_filters(effects, cw, ch, dur, fps)
+        efx_v, _ = effect_filters(effects, cw, ch, dur, fps)
         vf += efx_v
         vf.append(f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={ctx['bg']}")
     else:
         fchain, _ = fit_chain(fit, W, H, focus, ctx["bg"])
         vf.append(fchain)
         vf.append(f"fps={fps}")
-        efx_v, efx_a = effect_filters(effects, W, H, dur, fps)
+        efx_v, _ = effect_filters(effects, W, H, dur, fps)
         vf += efx_v
+    adj = clip.get("adjust") or {}
+    if adj:  # per-clip correction before the shared grade (match shots to each other)
+        if adj.get("temperature"):
+            vf.append(f"colortemperature=temperature={int(adj['temperature'])}:mix={adj.get('temperature_mix', 0.5)}")
+        eq = {k: adj[k] for k in ("brightness", "contrast", "saturation", "gamma") if k in adj}
+        if eq:
+            vf.append("eq=" + ":".join(f"{k}={v}" for k, v in eq.items()))
     if grade and grade != "none":
         if str(grade).startswith("lut:"):
             vf.append(f"lut3d='{grade[4:]}'")
@@ -240,47 +255,77 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
                 vf.append(g)
     if freeze:
         vf.append(f"tpad=stop_mode=clone:stop_duration={float(freeze.get('duration', 0.6))}")
+    # exact frame count (= round(length * fps)) so planned and rendered timelines match
+    vf.append(f"tpad=stop_mode=clone:stop_duration={3 / fps:.4f}")
     vf.append("setsar=1,format=yuv420p")
-    vgraph = f"[0:v]{','.join(vf)}[v]"
+    nframes = max(1, round(total * fps))
+    ffmpeg([*inputs, "-filter_complex", f"[0:v]{','.join(vf)}[v]", "-map", "[v]", "-an",
+            "-frames:v", str(nframes), "-c:v", "libx264", "-preset", ctx["clip_preset"], "-crf", str(ctx["clip_q"]),
+            "-g", str(int(fps)), str(out)])
+    return {"path": str(out), "duration": probe(out)["duration"], "cached": False, "audio": audio}
 
-    if has_audio:
+
+def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> dict:
+    """Clip audio as its own WAV, optionally extended for J-cuts (audio_lead) and L-cuts (audio_tail).
+
+    Returns {"path", "lead", "duration"}; `lead` = output seconds the audio starts before the picture.
+    """
+    reverse = "reverse" in names
+    lead = 0.0 if reverse else max(0.0, float(clip.get("audio_lead", 0)))
+    tail = 0.0 if (reverse or freeze) else max(0.0, float(clip.get("audio_tail", 0)))
+    lead_src = min(lead * speed, a)
+    tail_src = min(tail * speed, max(info["duration"] - b, 0))
+    lead_out, tail_out = lead_src / speed, tail_src / speed
+    fz = float(freeze.get("duration", 0.6)) if freeze else 0.0
+    akey = hashlib.sha1(json.dumps({"p": clip["path"], "a": a, "b": b, "s": speed, "v": clip.get("volume", 1.0),
+                                    "l": lead_src, "t": tail_src, "r": reverse, "fz": fz,
+                                    "fx": [e for e in clip.get("effects", []) if e.get("type") in ("fade_in", "fade_out")],
+                                    "ver": 1}, sort_keys=True).encode()).hexdigest()[:12]
+    aout = ctx["clip_dir"] / f"a{i:03d}_{akey}.wav"
+    length = lead_out + dur + tail_out + fz
+    if not aout.exists():
         af = []
-        if "reverse" in names:
+        if reverse:
             af.append("areverse")
         if speed != 1.0:
             af += atempo_chain(speed)
         af.append(f"volume={float(clip.get('volume', 1.0))}")
-        af += efx_a
-        af.append("afade=t=in:d=0.02")
-        af.append(f"afade=t=out:st={max(dur - 0.03, 0):.3f}:d=0.03")
-        if freeze:
-            af.append(f"apad=pad_dur={float(freeze.get('duration', 0.6))}")
+        for e in clip.get("effects", []):
+            if e.get("type") == "fade_in":
+                d = float(e.get("duration", 0.5))
+                af.append(f"afade=t=in:st={lead_out:.3f}:d={d}")
+            elif e.get("type") == "fade_out":
+                d = float(e.get("duration", 0.6))
+                af.append(f"afade=t=out:st={max(lead_out + dur - d, 0):.3f}:d={d}")
+        af.append("afade=t=in:d=0.03")
+        af.append(f"afade=t=out:st={max(lead_out + dur + tail_out - 0.04, 0):.3f}:d=0.04")
+        if fz:
+            af.append(f"apad=pad_dur={fz}")
         af.append("aresample=48000,aformat=channel_layouts=stereo")
-        agraph = f"[0:a]{','.join(af)}[a]"
-        amap = "[a]"
-        extra_in = []
-    else:
-        agraph = None
-        extra_in = ["-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
-        amap = "1:a"
-
-    fg = vgraph + (";" + agraph if agraph else "")
-    ffmpeg([*inputs, *extra_in, "-filter_complex", fg, "-map", "[v]", "-map", amap,
-            "-t", f"{total:.3f}", "-c:v", "libx264", "-preset", ctx["clip_preset"], "-crf", str(ctx["clip_q"]),
-            "-g", str(int(fps)), "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", str(out)])
-    return {"path": str(out), "duration": probe(out)["duration"], "cached": False}
+        ffmpeg(["-ss", f"{a - lead_src:.3f}", "-t", f"{(b - a) + lead_src + tail_src:.3f}", "-i", clip["path"],
+                "-vn", "-af", ",".join(af), "-t", f"{length:.3f}", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+                str(aout)])
+    return {"path": str(aout), "lead": round(lead_out, 3), "duration": round(length, 3)}
 
 
 # ------------------------------------------------------------------ beat sync
 
 
 def apply_beat_sync(edl: dict, analysis: dict | None, base: Path):
+    """Move clip out-points so that visible cuts land on beats of a music track.
+
+    beat_sync: {"music": 0, "every": 1, "clips": [first, last], "offset_beats": 0, "shift": 0.0}
+    Only clips in the inclusive index range are changed (default: all clips); clips with
+    "snap": false keep their length (e.g. dialogue). Colour/image clips change `duration`.
+    `shift` (seconds) nudges the whole grid, e.g. -0.25 at 120 BPM when the detector locked
+    onto off-beats.
+    With an xfade the visible switch is the middle of the transition, so that point is snapped.
+    """
     bs = edl.get("beat_sync")
     if not bs or not edl.get("music"):
         return
-    mi = int(bs.get("music", 0))
-    m = edl["music"][mi]
-    mpath = resolve_src(m["path"], None, base)
+    m = edl["music"][int(bs.get("music", 0))]
+    mpath = m["path"]
     beats = None
     for mm in (analysis or {}).get("music", []):
         if mm["path"] == mpath:
@@ -292,30 +337,102 @@ def apply_beat_sync(edl: dict, analysis: dict | None, base: Path):
         log("beat_sync: no beats found, skipping")
         return
     start, offset = float(m.get("start", 0)), float(m.get("offset", 0))
-    grid = [start + b - offset for b in beats if b >= offset]
     every = max(1, int(bs.get("every", 1)))
-    grid = grid[::every] if every > 1 else grid
-    acc = 0.0
-    for k, c in enumerate(edl["clips"]):
-        if c.get("type", "video") != "video":
-            acc += float(c.get("duration", 2))
+    shift = int(bs.get("offset_beats", 0))
+    nudge = float(bs.get("shift", 0))
+    grid = [start + bt + nudge - offset for bt in beats if bt + nudge >= offset]
+    grid = grid[shift::every]
+    clips = edl["clips"]
+    lo, hi = bs.get("clips", [0, len(clips) - 1])
+    hi = len(clips) + hi if hi < 0 else hi
+
+    tdur, length = _tdur, _clen
+
+    acc, moved = 0.0, 0
+    for k, c in enumerate(clips):
+        if k:
+            acc -= tdur(c)
+        L = length(c)
+        d_next = tdur(clips[k + 1]) if k + 1 < len(clips) else 0.0
+        if lo <= k <= hi and c.get("snap", True):
+            switch = acc + L - d_next / 2
+            cands = [g for g in grid if g >= acc + 0.35 + d_next / 2]
+            if cands:
+                target = min(cands, key=lambda g: abs(g - switch))
+                newL = target + d_next / 2 - acc
+                if c.get("type", "video") == "video":
+                    sp = float(c.get("speed", 1.0))
+                    a = float(c.get("in", 0))
+                    fz = L - (float(c["out"]) - a if c.get("out") is not None else float(c.get("dur", 2))) / sp
+                    c["out"] = round(a + (newL - fz) * sp, 3)
+                    c.pop("dur", None)
+                else:
+                    c["duration"] = round(newL, 3)
+                L = newL
+                moved += 1
+        acc += L
+    log(f"beat_sync: {moved} cut(s) snapped to beats")
+
+
+def _tdur(c):
+    tr = c.get("transition") or {}
+    return float(tr.get("duration", 0.5)) if tr.get("type", "cut") != "cut" else 0.0
+
+
+PLAN_FPS = [30.0]  # set from output.fps in main(); rendered clips last a whole number of frames
+
+
+def _clen(c, quantize=True):
+    L = _clen_raw(c)
+    return max(1, round(L * PLAN_FPS[0])) / PLAN_FPS[0] if quantize else L
+
+
+def _clen_raw(c):
+    if c.get("type", "video") != "video":
+        return float(c.get("duration", 2 if c.get("type") == "color" else 3))
+    a = float(c.get("in", 0))
+    b = float(c["out"]) if c.get("out") is not None else a + float(c.get("dur", 2))
+    fz = sum(float(e.get("duration", 0.6)) for e in c.get("effects", []) if e.get("type") == "freeze")
+    return (b - a) / float(c.get("speed", 1.0)) + fz
+
+
+def plan_starts(clips: list[dict]) -> list[float]:
+    """Predicted output start time of every clip (before rendering)."""
+    acc, out = 0.0, []
+    for k, c in enumerate(clips):
+        if k:
+            acc -= _tdur(c)
+        out.append(acc)
+        acc += _clen(c)
+    return out
+
+
+def apply_pins(edl: dict):
+    """Clips with "start_at" (output s) or "start_at_music" (seconds in music[0] / music[i] via
+    "music": i) start exactly there: the previous clip is lengthened or shortened to fit."""
+    clips = edl["clips"]
+    for k, c in enumerate(clips):
+        if k == 0 or ("start_at" not in c and "start_at_music" not in c):
             continue
-        sp = float(c.get("speed", 1.0))
-        a = float(c.get("in", 0))
-        b = float(c["out"]) if c.get("out") is not None else a + float(c.get("dur", 2))
-        nxt = edl["clips"][k + 1] if k + 1 < len(edl["clips"]) else None
-        d_next = float((nxt or {}).get("transition", {}).get("duration", 0)) if nxt and \
-            (nxt.get("transition") or {}).get("type", "cut") != "cut" else 0.0
-        want_end = acc + (b - a) / sp
-        cands = [g for g in grid if g >= acc + 0.35]
-        if not cands:
-            break
-        target = min(cands, key=lambda g: abs(g - want_end))
-        # with a transition the visual switch is mid-transition -> extend by d/2
-        new_len = target - acc + d_next / 2
-        c["in"], c["out"] = a, round(a + new_len * sp, 3)
-        c.pop("dur", None)
-        acc = target - d_next / 2
+        if "start_at" in c:
+            target = float(c["start_at"])
+        else:
+            m = edl["music"][int(c.get("pin_music", 0))]
+            target = float(m.get("start", 0)) + float(c["start_at_music"]) - float(m.get("offset", 0))
+        delta = target - plan_starts(clips)[k]
+        prev = clips[k - 1]
+        newL = _clen_raw(prev) + delta
+        if newL < 0.2:
+            raise SystemExit(f"pin on clip {k}: previous clip would be {newL:.2f}s; make earlier clips shorter")
+        if prev.get("type", "video") == "video":
+            sp = float(prev.get("speed", 1.0))
+            fz = _clen_raw(prev) - (float(prev["out"]) - float(prev.get("in", 0)) if prev.get("out") is not None
+                                else float(prev.get("dur", 2))) / sp
+            prev["out"] = round(float(prev.get("in", 0)) + (newL - fz) * sp, 3)
+            prev.pop("dur", None)
+        else:
+            prev["duration"] = round(newL, 3)
+        log(f"pin: clip {k} at {target:.2f}s (clip {k - 1} {'+' if delta >= 0 else ''}{delta:.2f}s)")
 
 
 # ------------------------------------------------------------------ subtitles from transcript
@@ -432,6 +549,7 @@ def main():
     ap.add_argument("edl")
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--no-review", action="store_true")
+    ap.add_argument("--plan", action="store_true", help="print the planned timeline (after beat sync/pins) and exit")
     args = ap.parse_args()
 
     edl_path = Path(args.edl).resolve()
@@ -444,6 +562,7 @@ def main():
 
     o = edl.get("output", {})
     W, H, fps = int(o.get("width", 1920)), int(o.get("height", 1080)), float(o.get("fps", 30))
+    PLAN_FPS[0] = fps
     out_path = Path(o.get("path", "output.mp4"))
     out_path = out_path if out_path.is_absolute() else base / out_path
     if args.draft:
@@ -471,9 +590,19 @@ def main():
         elif c.get("type") == "image":
             c["path"] = resolve_src(c["path"], None, base)
     for m in edl.get("music", []):
-        m["path"] = resolve_src(m["path"], None, base)
+        m["path"] = resolve_src(m["path"], analysis, base)
+    for snd in edl.get("sounds", []):
+        if not snd.get("sfx"):
+            snd["path"] = resolve_src(snd.get("src") or snd["path"], analysis, base)
 
     apply_beat_sync(edl, analysis, base)
+    apply_pins(edl)
+    save_json(edl, work / "resolved_edl.json")  # after beat sync + pins: the exact in/out points rendered
+    if args.plan:
+        for k, (c, t0) in enumerate(zip(edl["clips"], plan_starts(edl["clips"]))):
+            src = f"{c.get('in', 0):.2f}-{c.get('out', 0):.2f}" if c.get("type", "video") == "video" else c.get("type")
+            print(f"{k:3d}  {t0:7.2f}  len {_clen(c):5.2f}  {src}")
+        return
 
     # 1) clips
     rendered = []
@@ -482,16 +611,16 @@ def main():
         log(f"clip {i + 1}/{len(edl['clips'])} {'(cached)' if r['cached'] else ''} {r['duration']:.2f}s")
         rendered.append(r)
 
-    # 2) join graph + timeline
+    # 2) join graph (video only) + timeline
     n = len(rendered)
     inputs, parts, timeline = [], [], []
     for r in rendered:
         inputs += ["-i", r["path"]]
     for i in range(n):  # common timebase so concat and xfade can be mixed freely
         parts.append(f"[{i}:v]fps={fps},settb=AVTB,setpts=PTS-STARTPTS[s{i}]")
-        parts.append(f"[{i}:a]asetpts=PTS-STARTPTS[t{i}]")
     acc = 0.0
-    cur_v, cur_a = "[s0]", "[t0]"
+    cur_v = "[s0]"
+    trans_in = [0.0] * n  # xfade duration into each clip (0 = cut)
     for i, (c, r) in enumerate(zip(edl["clips"], rendered)):
         tr = c.get("transition") or {}
         ttype = XFADE_ALIAS.get(tr.get("type", "cut"), tr.get("type", "cut"))
@@ -506,12 +635,12 @@ def main():
                     raise SystemExit(f"unknown transition '{ttype}'. options: cut, {', '.join(sorted(XFADE))}")
                 d = max(0.04, min(d, prev_dur * 0.9, r["duration"] * 0.9))
                 start = acc - d
+                trans_in[i] = d
                 parts.append(f"{cur_v}[s{i}]xfade=transition={ttype}:duration={d:.3f}:offset={start:.3f}[v{i}]")
-                parts.append(f"{cur_a}[t{i}]acrossfade=d={d:.3f}:c1=tri:c2=tri[a{i}]")
             else:
                 start = acc
-                parts.append(f"{cur_v}{cur_a}[s{i}][t{i}]concat=n=2:v=1:a=1[v{i}][a{i}]")
-            cur_v, cur_a = f"[v{i}]", f"[a{i}]"
+                parts.append(f"{cur_v}[s{i}]concat=n=2:v=1:a=0[v{i}]")
+            cur_v = f"[v{i}]"
             acc = start + r["duration"]
         sp = float(c.get("speed", 1.0))
         src_in = float(c.get("in", 0))
@@ -547,38 +676,107 @@ def main():
     else:
         parts.append(f"{cur_v}format=yuv420p[vout]")
 
-    # 4) audio mix
+    # 4) audio: clip audio placed on the timeline (J/L cuts), music, sound effects
+    vin = sum(1 for x in inputs if x == "-i")
     base_vol = float(edl.get("audio", {}).get("clip_volume", 1.0))
+    flagged = [i for i, c in enumerate(edl["clips"]) if c.get("duck_music")]
+    clip_tracks, side_tracks = [], []
+    for i, (c, r, t) in enumerate(zip(edl["clips"], rendered, timeline)):
+        au = r.get("audio")
+        if not au:
+            continue
+        at = t["out_start"] - au["lead"]
+        nxt_d = trans_in[i + 1] if i + 1 < n else 0.0
+        has_tail = float(c.get("audio_tail", 0)) > 0
+        fin = trans_in[i] if (trans_in[i] and au["lead"] == 0) else 0.03
+        fout = nxt_d if (nxt_d and not has_tail) else (0.15 if has_tail else 0.03)
+        inputs += ["-i", au["path"]]
+        chain = [f"afade=t=in:d={fin:.3f}", f"afade=t=out:st={max(au['duration'] - fout, 0):.3f}:d={fout:.3f}"]
+        if at < 0:
+            chain.insert(0, f"atrim=start={-at:.3f},asetpts=PTS-STARTPTS")
+            at = 0.0
+        ms = int(round(at * 1000))
+        chain.append(f"adelay={ms}|{ms}")
+        if flagged and i in flagged:
+            parts.append(f"[{vin}:a]{','.join(chain)},asplit=2[ca{i}][cs{i}]")
+            side_tracks.append(f"[cs{i}]")
+        else:
+            parts.append(f"[{vin}:a]{','.join(chain)}[ca{i}]")
+        clip_tracks.append(f"[ca{i}]")
+        vin += 1
+
+    def bus(tracks, label):
+        if not tracks:
+            parts.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={total:.3f}[{label}]")
+        elif len(tracks) == 1:
+            parts.append(f"{tracks[0]}apad,atrim=duration={total:.3f}[{label}]")
+        else:
+            parts.append(f"{''.join(tracks)}amix=inputs={len(tracks)}:duration=longest:normalize=0:dropout_transition=0,"
+                         f"apad,atrim=duration={total:.3f}[{label}]")
+
+    bus(clip_tracks, "cbus0")
     music = edl.get("music", [])
-    if music:
-        nduck = sum(1 for m in music if m.get("duck"))
-        parts.append(f"{cur_a}volume={base_vol},asplit={nduck + 1}[abase]" +
-                     "".join(f"[aside{j}]" for j in range(nduck)) if nduck
-                     else f"{cur_a}volume={base_vol}[abase]")
-        mix, dj = ["[abase]"], 0
-        for k, m in enumerate(music):
-            inputs += ["-stream_loop", "-1" if m.get("loop", True) else "0", "-i", m["path"]]
-            mstart = float(m.get("start", 0))
-            mend = float(m.get("end", total))
-            mlen = max(0.1, mend - mstart)
-            fi, fo = float(m.get("fade_in", 0.5)), float(m.get("fade_out", 2.0))
-            chain = (f"[{vin}:a]atrim=start={float(m.get('offset', 0)):.3f}:duration={mlen:.3f},asetpts=PTS-STARTPTS,"
-                     f"aresample=48000,aformat=channel_layouts=stereo,volume={float(m.get('volume', 0.3))},"
-                     f"afade=t=in:d={fi},afade=t=out:st={max(mlen - fo, 0):.3f}:d={fo},"
-                     f"adelay={int(mstart * 1000)}|{int(mstart * 1000)}")
-            if m.get("duck"):
-                parts.append(chain + f"[mraw{k}]")
-                parts.append(f"[mraw{k}][aside{dj}]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=400[m{k}]")
-                dj += 1
-            else:
-                parts.append(chain + f"[m{k}]")
-            mix.append(f"[m{k}]")
-            vin += 1
-        parts.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[amix]")
-        alast = "[amix]"
+    nduck = sum(1 for m in music if m.get("duck"))
+    if nduck and side_tracks:
+        bus(side_tracks, "sidebus")
+        parts.append(f"[cbus0]volume={base_vol}[cbus]")
+        parts.append(f"[sidebus]asplit={nduck}" + "".join(f"[aside{j}]" for j in range(nduck)) if nduck > 1
+                     else "[sidebus]anull[aside0]")
+    elif nduck:
+        parts.append(f"[cbus0]volume={base_vol},asplit={nduck + 1}[cbus]" + "".join(f"[aside{j}]" for j in range(nduck)))
     else:
-        parts.append(f"{cur_a}volume={base_vol}[amix]")
-        alast = "[amix]"
+        parts.append(f"[cbus0]volume={base_vol}[cbus]")
+    mix, dj = ["[cbus]"], 0
+    for k, m in enumerate(music):
+        inputs += ["-stream_loop", "-1" if m.get("loop", True) else "0", "-i", m["path"]]
+        mstart = float(m.get("start", 0))
+        mend = float(m["end"]) if m.get("end") is not None else total
+        mlen = max(0.1, mend - mstart)
+        fi, fo = float(m.get("fade_in", 0.5)), float(m.get("fade_out", 2.0))
+        ms = int(mstart * 1000)
+        chain = (f"[{vin}:a]atrim=start={float(m.get('offset', 0)):.3f}:duration={mlen:.3f},asetpts=PTS-STARTPTS,"
+                 f"aresample=48000,aformat=channel_layouts=stereo,volume={float(m.get('volume', 0.3))},"
+                 f"afade=t=in:d={fi},afade=t=out:st={max(mlen - fo, 0):.3f}:d={fo},adelay={ms}|{ms}")
+        if m.get("duck"):
+            parts.append(chain + f"[mraw{k}]")
+            parts.append(f"[mraw{k}][aside{dj}]sidechaincompress=threshold={m.get('duck_threshold', 0.03)}:"
+                         f"ratio={m.get('duck_ratio', 8)}:attack=20:release={m.get('duck_release', 400)}[m{k}]")
+            dj += 1
+        else:
+            parts.append(chain + f"[m{k}]")
+        mix.append(f"[m{k}]")
+        vin += 1
+    from sfx import sfx_file
+    for k, snd in enumerate(edl.get("sounds", [])):
+        if "clip" in snd:
+            at = timeline[int(snd["clip"])]["out_start"] + float(snd.get("start", 0))
+        else:
+            at = float(snd.get("at", snd.get("start", 0)))
+        if snd.get("sfx"):
+            path, a_in, a_len = sfx_file(snd["sfx"], work / "sfx", **snd.get("params", {})), 0.0, None
+        else:
+            path = snd["path"]
+            a_in = float(snd.get("in", 0))
+            a_len = float(snd["out"]) - a_in if snd.get("out") is not None else None
+        inputs += ["-ss", f"{a_in:.3f}", *(["-t", f"{a_len:.3f}"] if a_len else []), "-i", str(path)]
+        chain = [f"volume={float(snd.get('volume', 1.0))}", "aresample=48000", "aformat=channel_layouts=stereo"]
+        if snd.get("fade_in"):
+            chain.append(f"afade=t=in:d={snd['fade_in']}")
+        if snd.get("fade_out") and a_len:
+            chain.append(f"afade=t=out:st={max(a_len - float(snd['fade_out']), 0):.3f}:d={snd['fade_out']}")
+        if at < 0:
+            chain.insert(0, f"atrim=start={-at:.3f},asetpts=PTS-STARTPTS")
+            at = 0.0
+        ms = int(round(at * 1000))
+        chain.append(f"adelay={ms}|{ms}")
+        parts.append(f"[{vin}:a]{','.join(chain)}[snd{k}]")
+        mix.append(f"[snd{k}]")
+        vin += 1
+    if len(mix) > 1:
+        parts.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0:dropout_transition=0[amix]")
+    else:
+        parts.append("[cbus]anull[amix]")
+    alast = "[amix]"
     lufs = float(o.get("loudness", -14))
     parts.append(f"{alast}loudnorm=I={lufs}:TP=-1.5:LRA=11,aresample=48000[aout]")
 
@@ -617,15 +815,19 @@ def fix_loudness(path: Path, target: float):
     if not m:
         return
     measured = float(m[-1])
+    pk = re.findall(r"Peak:\s+(-?[0-9.]+) dBFS", p.stderr)
+    peak = float(pk[-1]) if pk else -99.0
     gain = target - measured
-    if abs(gain) < 1.0 or measured < -60:
+    if measured < -60 or (abs(gain) < 1.0 and peak <= -1.0):  # AAC adds up to ~2 dB on hard transients
         return
+    if abs(gain) < 1.0:
+        gain = 0.0  # level is fine, only limit the peaks
     tmp = path.with_name(path.stem + ".loud" + path.suffix)
     ffmpeg(["-i", str(path), "-map", "0", "-c:v", "copy", "-af",
-            f"volume={gain:.2f}dB,alimiter=limit=0.84:level=false", "-c:a", "aac", "-b:a", "192k",
+            f"volume={gain:.2f}dB,alimiter=limit=0.7:level=false:attack=3:release=80", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(tmp)])
     tmp.replace(path)
-    log(f"loudness {measured:.1f} -> ~{target:.0f} LUFS")
+    log(f"loudness {measured:.1f} LUFS / peak {peak:.1f} dBFS -> ~{target:.0f} LUFS, peaks limited")
 
 
 def write_srt(subs: list[dict], path: Path):

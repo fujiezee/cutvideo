@@ -36,6 +36,28 @@ Pick the recipe that matches the footage and the ask, then adapt it. Rules of th
 5. Speed: `speed` 0.5 for one or two hero moments, 1.5-2 for travel/process shots.
 6. Clip audio at 0-0.3 (`audio.clip_volume`); music volume 0.8-1.
 
+## Trailer / teaser from a longer film
+
+1. Find the story in the transcript: setup line(s), the conflict, a turn ("years later"), the
+   stakes, and one strong or funny line kept for after the title (the "button").
+2. One continuous music bed under everything (the film's own score from its credits works and
+   shares its licence). Analyse it (`analyze.py --music bed.wav`): note quiet stretches, dips
+   and hits in `energy_db_1hz`, and check the detected beats against those hits.
+3. Structure on the music: dialogue over the quiet part; a dip of near-silence right before the
+   drop; beat-synced action from the drop (`beat_sync`, `every: 2`); dialogue again over the
+   calmer middle; a short burst; a beat of silence; title pinned on the biggest hit
+   (`start_at_music`); button line; end card.
+4. Set the music `offset` so the drop lands where act one ends (plan with `--plan`).
+5. Dialogue clips: `duck_music`, `snap: false`, raise quiet lines (`volume` 1.5-2.5), use
+   `audio_tail` / `audio_lead` instead of cutting words when the picture must change.
+   Action clips: clip audio low (0.3-0.4) so the film's own score does not fight the bed.
+6. Sound design with `sounds`: `boom` on the drop and title, `riser` ending just before the
+   title (leave ~0.5 s of silence), `swell` into the drop, `whoosh` on a few fast cuts,
+   `hit` on accents, `sub_drop` into a mood change.
+7. Interstitial `card` texts on black clips tell the story in a few words.
+8. Match colour across scenes with per-clip `adjust`, then one shared grade (`trailer`).
+9. Credit the source on an end card when its licence requires attribution.
+
 ## Beat-synced vertical short (抖音 / Reels / Shorts)
 
 1. 9:16, 7-30 s. First frame must already be interesting (no fade in from black).
