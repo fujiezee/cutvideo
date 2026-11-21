@@ -88,11 +88,31 @@ BOLD_CANDIDATES = [  # "path#face-index"
 ]
 
 
+SERIF_CANDIDATES = [  # intertitles, classic titles
+    "/System/Library/Fonts/Supplemental/Songti.ttc#1",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+    "C:/Windows/Fonts/simsun.ttc",
+    "/System/Library/Fonts/Supplemental/Georgia.ttf",
+]
+MONO_CANDIDATES = [  # camcorder / terminal style
+    "/System/Library/Fonts/Menlo.ttc#1",
+    "/System/Library/Fonts/Supplemental/Courier New Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+    "C:/Windows/Fonts/consolab.ttf",
+]
+
+
 def find_font(preferred: str | None = None, bold: bool = False) -> str | None:
-    """Return a font spec "path" or "path#index" (face inside a .ttc)."""
-    if preferred and Path(preferred.partition("#")[0]).exists():
+    """Return a font spec "path" or "path#index" (face inside a .ttc).
+    `preferred` may be a path, "path#index", or an alias: "serif" / "mono"."""
+    aliases = {"serif": SERIF_CANDIDATES, "mono": MONO_CANDIDATES}
+    if preferred in aliases:
+        lst = aliases[preferred] + FONT_CANDIDATES
+    elif preferred and Path(preferred.partition("#")[0]).exists():
         return preferred
-    for f in (BOLD_CANDIDATES if bold else []) + FONT_CANDIDATES:
+    else:
+        lst = (BOLD_CANDIDATES if bold else []) + FONT_CANDIDATES
+    for f in lst:
         path, _, idx = f.partition("#")
         if Path(path).exists():
             if idx:

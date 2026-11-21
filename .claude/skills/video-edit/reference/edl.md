@@ -40,7 +40,9 @@ Video clip:
 
 - `src` (or `path`): `v1`… from analysis, or a file path. `dur` may replace `out`.
 - `speed`: 0.25-4. Audio is time-stretched (pitch kept).
-- `focus`: crop centre for `fit: crop`, 0..1 (x, y). Use it to keep faces in a 9:16 crop.
+- `focus`: crop position for `fit: crop`, 0..1 (x, y) of the overflow (0.5 = centre). Use it to
+  keep faces in a 9:16 crop. `"auto"` centres the crop on the largest face found in three
+  sampled frames (slight headroom), falling back to the centre when no face is found.
 - `transition`: how this clip enters from the previous one. Omit for a hard cut.
 - `adjust`: per-clip colour correction applied before the shared grade, to match shots:
   `{"temperature": 5600, "temperature_mix": 0.5, "brightness": 0.03, "contrast": 1.05,
@@ -55,11 +57,12 @@ Audio of a clip (rendered as its own track, so it can extend past the picture):
 | `audio_lead` | J-cut: audio starts this many seconds before the picture (taken from the source before `in`) |
 | `audio_tail` | L-cut: audio continues this many seconds after the picture (from the source after `out`) |
 | `duck_music` | this clip's audio ducks `duck: true` music. If no clip sets it, all clip audio ducks |
+| `audio_filter` | raw ffmpeg audio filters for this clip, e.g. `"highpass=f=180,lowpass=f=4500"` (tape / phone sound) |
 
 Transitions crossfade the clip audio automatically. Changing only audio keys does not
 re-encode the video.
 
-Generated clips:
+Generated clips (colour clips are not graded unless they set their own `grade`):
 
 ```json
 {"type": "color", "color": "#000000", "duration": 1.5}
@@ -92,6 +95,7 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
 | `bw` | – | black and white |
 | `blur` | `amount` 12 | gaussian blur (background behind text) |
 | `vignette`, `grain` (`amount`), `sharpen`, `mirror`, `echo` | – | misc looks; `echo` = ghost trails |
+| `flicker` | `amount` 0.05 | old-projector brightness flicker |
 | `intro` | see below | freeze-frame character intro (name card) |
 
 ### Character intro (`intro` effect)
@@ -119,7 +123,9 @@ optional `index`. `side`: where the text goes (`auto` = opposite the person).
 ## Grades
 
 `none`, `natural`, `vivid`, `cinematic`, `teal_orange`, `warm`, `cool`, `moody`, `vintage`,
-`film`, `bw`, `fade`, `bright`, `trailer`, or `lut:/path/to/file.cube`.
+`film`, `bw`, `fade`, `bright`, `trailer`, `vhs` (faded colour, chroma shift, softness,
+noise), `silent` (high-contrast B&W, grain, vignette), `cyberpunk` (cyan shadows, magenta
+highlights, high saturation), or `lut:/path/to/file.cube`.
 
 ## texts
 
@@ -147,7 +153,12 @@ transcript), mapped through the clip's `in` and `speed` and clamped to the part 
 that is visible (up to the midpoint of its transitions).
 
 - `style`: `caption`, `title`, `subtitle`, `highlight`, `lower_third`, `label`, `tag`, `quote`,
-  `card` (trailer interstitial: wide letter spacing, slow push-in).
+  `card` (trailer interstitial: wide letter spacing, slow push-in), `intertitle` (silent-film
+  card: serif, double frame), `neon` (glowing text), `stamp` (camcorder date/PLAY overlay,
+  monospace).
+- `border`: colour of a double-rule frame around the text; `glow`: colour of a neon glow.
+- `until_clip`: end the text where that clip becomes visible (e.g. stamps that stop at a
+  "STOP" screen); works with or without `clip`.
 - `pos`: `center`, `top`, `bottom`, `left`, `right`, `top_left`, `top_right`, `bottom_left`,
   `bottom_right`, `lower_left`, `center_low`, `center_high`, `caption`, or `[x, y]` (0..1).
 - `size`: ≤ 1 = fraction of the frame's short side; > 1 = pixels at full resolution.
@@ -155,7 +166,8 @@ that is visible (up to the midpoint of its transitions).
   `type_time`, `zoom` = push-in amount, default 0.08).
 - `tracking`: letter spacing as a fraction of the font size (0.1-0.3 for titles).
 - `weight`: `bold` uses a bold CJK-capable face (default for `caption`, `title`,
-  `highlight`, `tag`, `card`); `font` may name a face inside a collection as `path.ttc#index`.
+  `highlight`, `tag`, `card`); `font` may name a face inside a collection as `path.ttc#index`,
+  or the aliases `serif` / `mono`.
 - `line_colors`: one colour per line, e.g. bilingual subtitles `["#FFFFFF", "#C8C8C8"]`.
 - `box`: background colour (`#RRGGBBAA` allowed). `\n` forces a line break.
 
@@ -198,6 +210,7 @@ Transcript words are mapped through every clip's `in/out/speed` onto the output 
 ```
 
 `width` ≤ 1 = fraction of frame width. `end: null` = until the end.
+Built-in full-frame overlay: `{"preset": "scanlines", "opacity": 0.22}` (CRT / VHS lines).
 
 ## music
 
@@ -208,6 +221,8 @@ Transcript words are mapped through every clip's `in/out/speed` onto the output 
 ```
 
 - `path`: a file, or a source id like `v1` (e.g. the film's own score from its credits).
+- `filter`: raw ffmpeg audio filters applied to this track (e.g. a gramophone band-pass
+  `"highpass=f=250,lowpass=f=3200"`).
 - `start`/`end`: where it sits on the output timeline; `offset`: where to start in the song.
 - `duck`: compress the music while dialogue plays (see `duck_music` on clips).
 - Montage with music only: set `audio.clip_volume` to 0-0.3 and music `volume` 0.8-1.0.
@@ -240,9 +255,9 @@ Transcript words are mapped through every clip's `in/out/speed` onto the output 
   a transition's switch point is its midpoint. Clips with `"snap": false` keep their length
   (dialogue). Colour/image clips change `duration`.
 - `every`: cut every N beats; `offset_beats`: which beat of the N to start on (parity);
-  `shift`: nudge the grid in seconds. Check the detected beats against the energy curve:
-  if hits fall half a beat before the beats, the detector locked onto off-beats (`shift`
-  = -half a beat).
+  `shift`: nudge the grid in seconds, or `"auto"` to pick the offset (±0.3 s) that puts the
+  grid on the strongest onsets inside the synced span. Beat-tracker phase can drift within
+  one song, so prefer `"auto"`; it is logged.
 
 Pins land one clip on an exact moment, e.g. the title on a musical hit; the previous clip
 absorbs the difference:

@@ -54,6 +54,11 @@ GRADES = {
     "fade": "curves=all='0/0.08 0.5/0.5 1/0.94',eq=saturation=0.8",
     "bright": "eq=brightness=0.05:contrast=1.04:saturation=1.1:gamma=1.06",
     "trailer": "colorbalance=rs=-0.05:bs=0.06:rh=0.06:bh=-0.05,eq=contrast=1.12:saturation=0.9:gamma=0.97",
+    "vhs": "curves=preset=vintage,eq=saturation=1.3:contrast=0.9:brightness=0.03,chromashift=cbh=5:crh=-5,"
+           "gblur=sigma=0.7,noise=alls=16:allf=t",
+    "silent": "hue=s=0,eq=contrast=1.4:brightness=0.03:gamma=0.88,noise=alls=20:allf=t,vignette=PI/3.2",
+    "cyberpunk": "colorbalance=rs=0.08:gs=-0.12:bs=0.28:rm=0.06:gm=-0.06:bm=0.12:rh=0.16:gh=-0.06:bh=0.12,"
+                 "eq=contrast=1.2:saturation=1.5:gamma=0.9",
 }
 
 
@@ -159,6 +164,9 @@ def effect_filters(effects: list[dict], W: int, H: int, dur: float, fps: float) 
             vf.append(f"noise=alls={e.get('amount', 10)}:allf=t")
         elif t == "sharpen":
             vf.append("unsharp=5:5:0.8")
+        elif t == "flicker":  # old projector brightness flicker
+            a = float(e.get("amount", 0.05))
+            vf.append(f"eq=brightness='{a}*sin(t*61)*sin(t*17+1)':eval=frame")
         elif t == "echo":  # ghost trails
             vf.append("lagfun=decay=0.92")
         elif t == "speed_lines":
@@ -169,6 +177,46 @@ def effect_filters(effects: list[dict], W: int, H: int, dur: float, fps: float) 
 # ------------------------------------------------------------------ clip rendering
 
 
+def auto_focus(clip: dict, W: int, H: int, ctx: dict) -> list[float]:
+    """Crop focus for fit=crop from the largest face in the clip (3 frames sampled);
+    falls back to the centre. Returns crop offsets as fractions of the overflow."""
+    import cv2
+    from intro import _largest_face
+    info = ctx["probe"](clip["path"])
+    a = float(clip.get("in", 0))
+    b = float(clip["out"]) if clip.get("out") is not None else a + float(clip.get("dur", 2))
+    cap = cv2.VideoCapture(clip["path"])
+    faces = []
+    for f in (0.25, 0.5, 0.75):
+        cap.set(cv2.CAP_PROP_POS_MSEC, (a + (b - a) * f) * 1000)
+        ok, fr = cap.read()
+        if not ok:
+            continue
+        k = 640 / fr.shape[1]
+        small = cv2.resize(fr, (640, int(fr.shape[0] * k)))
+        fc = _largest_face(small)
+        if fc is not None:
+            x, y, w, h = fc
+            faces.append(((x + w / 2) / small.shape[1], (y + h / 2) / small.shape[0], w * h))
+    cap.release()
+    if not faces:
+        log(f"focus auto: no face in {Path(clip['path']).name} {a:.1f}-{b:.1f}, centre crop")
+        return [0.5, 0.5]
+    tot = sum(f[2] for f in faces)
+    cx = sum(f[0] * f[2] for f in faces) / tot
+    cy = sum(f[1] * f[2] for f in faces) / tot
+    sw, sh = info["width"], info["height"]
+    k = max(W / sw, H / sh)
+    iw, ih = sw * k, sh * k
+
+    def frac(c, full, out, headroom=0.0):
+        if full - out < 1:
+            return 0.5
+        return min(1.0, max(0.0, (c * full - out / 2 + headroom * out) / (full - out)))
+    # faces sit a little above centre in a good vertical frame
+    return [round(frac(cx, iw, W), 3), round(frac(cy, ih, H, 0.12), 3)]
+
+
 def intro_of(clip: dict, fps: float):
     """(spec, at, hold) of the clip's freeze-frame intro, hold rounded to whole frames; or None."""
     spec = next((e for e in clip.get("effects", []) if e.get("type") == "intro"), None)
@@ -177,7 +225,7 @@ def intro_of(clip: dict, fps: float):
     return spec, float(spec.get("at", 0.5)), max(1, round(float(spec.get("hold", 1.8)) * fps)) / fps
 
 
-AUDIO_KEYS = {"volume", "mute", "audio_lead", "audio_tail", "duck_music", "transition"}
+AUDIO_KEYS = {"volume", "mute", "audio_lead", "audio_tail", "duck_music", "transition", "audio_filter"}
 
 
 def render_clip(i: int, clip: dict, ctx: dict) -> dict:
@@ -186,9 +234,12 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     speed = float(clip.get("speed", 1.0))
     effects = list(clip.get("effects", []))
     names = {e.get("type") for e in effects}
-    grade = clip.get("grade", ctx["grade"])
+    # colour clips (cards, black) stay neutral unless the clip asks for a grade
+    grade = clip.get("grade", ctx["grade"] if clip.get("type", "video") != "color" else "none")
     fit = clip.get("fit", ctx["fit"])
     focus = clip.get("focus", [0.5, 0.5])
+    if focus == "auto":
+        focus = auto_focus(clip, W, H, ctx) if kind == "video" else [0.5, 0.5]
 
     vclip = {k: v for k, v in clip.items() if k not in AUDIO_KEYS}  # audio tweaks must not re-encode video
     iv = 0
@@ -299,7 +350,7 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
     akey = hashlib.sha1(json.dumps({"p": clip["path"], "a": a, "b": b, "s": speed, "v": clip.get("volume", 1.0),
                                     "l": lead_src, "t": tail_src, "r": reverse, "fz": fz,
                                     "fx": [e for e in clip.get("effects", []) if e.get("type") in ("fade_in", "fade_out")],
-                                    "intro": intro_of(clip, ctx["fps"]), "ver": 2},
+                                    "intro": intro_of(clip, ctx["fps"]), "af": clip.get("audio_filter"), "ver": 2},
                                    sort_keys=True).encode()).hexdigest()[:12]
     aout = ctx["clip_dir"] / f"a{i:03d}_{akey}.wav"
     intro = intro_of(clip, ctx["fps"])
@@ -312,6 +363,8 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
         if speed != 1.0:
             af += atempo_chain(speed)
         af.append(f"volume={float(clip.get('volume', 1.0))}")
+        if clip.get("audio_filter"):
+            af.append(clip["audio_filter"])
         for e in clip.get("effects", []):
             if e.get("type") == "fade_in":
                 d = float(e.get("duration", 0.5))
@@ -339,6 +392,28 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
 
 
 # ------------------------------------------------------------------ beat sync
+
+
+def best_beat_shift(path: str, beats: list[float]) -> float:
+    """Shift (s, -0.3..0.3) that maximises onset strength at the beats: corrects off-beat or
+    drifting phase from the beat tracker."""
+    import numpy as np
+    from common import decode_audio_mono
+    if len(beats) < 4:
+        return 0.0
+    y = decode_audio_mono(path, 22050)
+    hop = 220  # 10 ms
+    n = len(y) // hop
+    r = np.sqrt((y[:n * hop].reshape(n, hop) ** 2).mean(1))
+    onset = np.maximum(0, np.diff(r, prepend=r[0]))
+    b = np.array(beats)
+    best, best_s = -1.0, 0.0
+    for sh in np.arange(-0.3, 0.301, 0.01):
+        idx = np.clip(((b + sh) * 100).astype(int), 0, n - 1)
+        v = onset[idx].mean()
+        if v > best:
+            best, best_s = v, float(sh)
+    return round(best_s, 3)
 
 
 def apply_beat_sync(edl: dict, analysis: dict | None, base: Path):
@@ -369,12 +444,19 @@ def apply_beat_sync(edl: dict, analysis: dict | None, base: Path):
     start, offset = float(m.get("start", 0)), float(m.get("offset", 0))
     every = max(1, int(bs.get("every", 1)))
     shift = int(bs.get("offset_beats", 0))
-    nudge = float(bs.get("shift", 0))
-    grid = [start + bt + nudge - offset for bt in beats if bt + nudge >= offset]
-    grid = grid[shift::every]
     clips = edl["clips"]
     lo, hi = bs.get("clips", [0, len(clips) - 1])
     hi = len(clips) + hi if hi < 0 else hi
+    if bs.get("shift", 0) == "auto":  # phase that puts the grid on real onsets in the synced span
+        starts_ = plan_starts(clips)
+        t0 = starts_[lo] - start + offset
+        t1 = starts_[hi] + _clen(clips[hi]) - start + offset
+        nudge = best_beat_shift(mpath, [bt for bt in beats if t0 - 1 <= bt <= t1 + 1])
+        log(f"beat_sync: auto shift {nudge:+.3f}s over song {t0:.1f}-{t1:.1f}s")
+    else:
+        nudge = float(bs.get("shift", 0))
+    grid = [start + bt + nudge - offset for bt in beats if bt + nudge >= offset]
+    grid = grid[shift::every]
 
     tdur, length = _tdur, _clen
 
@@ -496,6 +578,11 @@ def anchor_to_clip(item: dict, timeline: list[dict]) -> dict | None:
     {"clip": i, "src_start": 316.2, "src_end": 320} -> source-video seconds inside that clip (follows speed)
     `clip` may be negative (-1 = last clip). Items without `clip` are returned unchanged.
     """
+    if "until_clip" in item:  # end where that clip becomes visible
+        seg_u = timeline[int(item["until_clip"])]
+        item = {**{k: v for k, v in item.items() if k != "until_clip"}, "end": seg_u.get("vis_start", seg_u["out_start"])}
+        if "clip" in item:
+            item["end"] -= timeline[int(item["clip"])]["out_start"]  # relative to the anchor clip
     if "clip" not in item:
         return item
     try:
@@ -788,7 +875,7 @@ def main():
     texts = [t for t in (anchor_to_clip(x, timeline) for x in edl.get("texts", [])) if t] + subs
     images = []
     for im in edl.get("images", []):
-        images.append({**im, "path": resolve_src(im["path"], None, base)})
+        images.append({**im, "path": resolve_src(im["path"], None, base)} if im.get("path") else dict(im))
     scale = W / int(o.get("width", W))
     layer_list = None
     if texts or images:
@@ -863,7 +950,8 @@ def main():
         ms = int(mstart * 1000)
         chain = (f"[{vin}:a]atrim=start={float(m.get('offset', 0)):.3f}:duration={mlen:.3f},asetpts=PTS-STARTPTS,"
                  f"aresample=48000,aformat=channel_layouts=stereo,volume={float(m.get('volume', 0.3))},"
-                 f"afade=t=in:d={fi},afade=t=out:st={max(mlen - fo, 0):.3f}:d={fo},adelay={ms}|{ms}")
+                 f"afade=t=in:d={fi},afade=t=out:st={max(mlen - fo, 0):.3f}:d={fo},"
+                 f"{(m['filter'] + ',') if m.get('filter') else ''}adelay={ms}|{ms}")
         if m.get("duck"):
             parts.append(chain + f"[mraw{k}]")
             parts.append(f"[mraw{k}][aside{dj}]sidechaincompress=threshold={m.get('duck_threshold', 0.03)}:"

@@ -88,6 +88,23 @@ Big bold captions with the word being spoken highlighted (`karaoke: "word"`,
 `karaoke_box`), 1-2 lines of 8-14 characters, placed around 70-75 % of the height. Fix the
 transcript first: wrong words are very visible when they light up.
 
+## Period and genre looks
+
+Worked examples with plans and build scripts: `examples/tears-of-steel/` in the repository.
+
+- **Retro VHS / home video**: 4:3 (`1440x1080`, `fit: crop`, `focus: auto`), `vhs` grade,
+  `images: [{"preset": "scanlines"}]`, `stamp` texts (PLAY ▶, SP, date) with `until_clip`,
+  short `glitch` on a few cuts as tracking errors, tape sound via `audio_filter` / music
+  `filter` (`highpass=f=180,lowpass=f=4500`), end on a blue STOP screen.
+- **Silent film**: 4:3, `silent` grade, `flicker` on every shot, `speed` 1.1-1.2, clips
+  `mute`, `intertitle` cards on black instead of dialogue (cards set `grade: silent` to share
+  the grain), `circleopen` / `circleclose` iris transitions, gramophone-filtered music.
+- **Cyberpunk / glitch**: full-frame 16:9, `cyberpunk` grade, alternate `glitch`,
+  `rgb_split`, `echo`; `pixelize` / `hlslice` between sections; `neon` texts; `glitch` SFX on
+  glitch cuts; beat sync every 2 beats.
+- **Beat-sync vertical mix**: 9:16 `fit: crop` + `focus: auto`, `beat_sync` every beat with
+  `shift: auto`, hook text in the first second, accents on ~1 cut in 5.
+
 ## Multi-camera / multiple takes of the same moment
 
 Match moments by transcript text or by visual content, keep the best-framed angle for each

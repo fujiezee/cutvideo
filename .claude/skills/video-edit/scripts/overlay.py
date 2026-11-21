@@ -27,6 +27,12 @@ STYLES = {
     "label":       {"size": 0.04, "color": "#111111", "box": "#FFFFFFE6", "pos": "top_left", "anim": "fade", "align": "left"},
     "tag":         {"weight": "bold", "size": 0.05, "color": "#FFFFFF", "box": "#FF2D55", "pos": "top", "anim": "pop"},
     "card":        {"weight": "bold", "size": 0.062, "color": "#FFFFFF", "pos": "center", "anim": "zoom", "tracking": 0.14, "anim_in": 0.45, "anim_out": 0.35},
+    "intertitle":  {"font": "serif", "size": 0.06, "color": "#EDEDED", "border": "#D8D8D8", "pos": "center",
+                    "anim": "fade", "line_spacing": 1.45, "anim_in": 0.4, "anim_out": 0.3},
+    "neon":        {"weight": "bold", "size": 0.085, "color": "#F0FFFF", "glow": "#00E5FF", "pos": "center",
+                    "anim": "pop"},
+    "stamp":       {"font": "mono", "size": 0.042, "color": "#FFFFFF", "shadow": True, "pos": "bottom_left",
+                    "align": "left"},
     "quote":       {"size": 0.065, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.04, "pos": "center", "anim": "typewriter", "shadow": True},
 }
 
@@ -147,7 +153,8 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
     size = st["size"]
     size = int(size * short) if size <= 1 else int(size)
     bold = st.get("weight") == "bold"
-    font = _font(st.get("font") or (find_font(None, bold=True) if bold else font_path), max(size, 8))
+    spec = find_font(st["font"], bold=bold) if st.get("font") else (find_font(None, bold=True) if bold else font_path)
+    font = _font(spec, max(size, 8))
     tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     max_w = int(W * float(st.get("max_width", 0.86)))
     text = str(st["text"])
@@ -166,12 +173,18 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
     lh = int((asc + desc) * float(st.get("line_spacing", 1.12)))
     full_lines = _wrap(text, font, max_w, tmp, track)
     tw = max([_line_w(tmp, l, font, track) for l in full_lines] + [1])
-    pad = int(size * 0.35) if st.get("box") else 0
+    pad = int(size * 0.35) if st.get("box") else int(size * 0.9) if st.get("border") else \
+        int(size * 0.6) if st.get("glow") else 0
     bw, bh = int(tw + 2 * pad + 2 * stroke + 8), int(lh * len(full_lines) + 2 * pad + 2 * stroke + 8)
     img = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     if st.get("box"):
         d.rounded_rectangle([0, 0, bw - 1, bh - 1], radius=int(size * 0.25), fill=_rgba(st["box"]))
+    if st.get("border"):  # double rule frame (silent-film intertitle)
+        lw_ = max(2, int(size * 0.05))
+        d.rectangle([lw_, lw_, bw - 1 - lw_, bh - 1 - lw_], outline=_rgba(st["border"]), width=lw_)
+        g = int(size * 0.22)
+        d.rectangle([g, g, bw - 1 - g, bh - 1 - g], outline=_rgba(st["border"]), width=max(1, lw_ // 2))
     align = st.get("align", "center")
     hl_words = st.get("highlight") or []
     line_colors = st.get("line_colors") or []
@@ -203,6 +216,13 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
                                             radius=int(size * 0.18), fill=_rgba(st.get("karaoke_box")))
                         x_on = None
                     cx += d.textlength(ch, font=font) + track
+        if st.get("glow"):  # neon glow: blurred coloured copies behind the text
+            gl = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            gc = _rgba(st["glow"])
+            _draw_line(ImageDraw.Draw(gl), x, y, line, font, [gc] * len(line), int(size * 0.06), gc, track)
+            img = Image.alpha_composite(img, gl.filter(ImageFilter.GaussianBlur(size * 0.28)))
+            img = Image.alpha_composite(img, gl.filter(ImageFilter.GaussianBlur(size * 0.1)))
+            d = ImageDraw.Draw(img)
         if st.get("shadow"):
             sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
             _draw_line(ImageDraw.Draw(sh), x + size * 0.05, y + size * 0.07, line, font, [(0, 0, 0, 170)] * len(line),
@@ -310,6 +330,14 @@ def _anim_breaks(item, fps):
 
 
 def _place_image(item, W, H):
+    if item.get("preset") == "scanlines":  # CRT / VHS scan lines over the whole frame
+        im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        a = int(255 * float(item.get("opacity", 0.22)))
+        gap = max(2, int(H / 360))
+        for yy in range(0, H, gap * 2):
+            d.rectangle([0, yy, W, yy + gap - 1], fill=(0, 0, 0, a))
+        return im
     im = Image.open(item["path"]).convert("RGBA")
     wf = float(item.get("width", 0.2))
     w = int(W * wf) if wf <= 1 else int(wf)
@@ -346,7 +374,10 @@ def build_layer(texts, images, W, H, fps, total, out_dir: Path, font=None, scale
         it["start"] = max(0.0, float(it.get("start", 0)))
         it["end"] = min(total, float(it.get("end") if it.get("end") is not None else total))
         it.setdefault("anim", "fade")
-        img_cache[id(it)] = _place_image(it, W, H)
+        if it.get("preset"):
+            it["pos"] = [0.0, 0.0]
+            it["opacity"] = 1.0  # already applied inside the preset
+        img_cache[id(it)] = _place_image({**im, **({"opacity": im.get("opacity", 0.22)} if im.get("preset") else {})}, W, H)
         items.append(("image", it))
 
     breaks = {0.0, total}
