@@ -298,7 +298,11 @@ Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `esp
   (default), `openai` (`base_url`, `api_key_env`, `model`, `voice`) or `http` (`url`,
   `headers`, `body` with `${text}` `${voice}` `${speed}` `${rate}` placeholders, `response`:
   `{"type": "audio"}` or `{"type": "json", "base64": "data.audio"}` / `{"url": "data.url"}`).
-  `${NAME}` in headers or url reads an environment variable. `"languages": {"zh": {...},
+  `${NAME}` in headers or url reads an environment variable; `env_file` (e.g.
+  `~/.config/duaer/api.env`) loads `KEY=value` lines first, so keys stay outside the repo.
+  For `openai`: `format` (`wav`, `mp3`, ...; some models accept only mp3/pcm), `voice` is
+  omitted when unset (models with one built-in voice), `extra_body` adds request fields.
+  `tts.py --list-models [--lang zh]` lists the provider's models with speech models marked. `"languages": {"zh": {...},
   "en": {...}}` chooses settings by the language of each line. `narration.provider` in an
   EDL overrides the file. See `tts.example.json`.
 - Lines are synthesised once and cached in `.render/tts/` (leading and trailing silence

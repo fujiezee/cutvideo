@@ -34,7 +34,8 @@ scripts are in [`examples/tears-of-steel/`](examples/tears-of-steel/).
   `~/.cache/video-edit/models`)
 - Voice-over uses the system text-to-speech (macOS `say`, or `espeak-ng` on Linux) unless
   an API provider is configured in `tts.json` (OpenAI-compatible or any HTTP API, set per
-  language; see `.claude/skills/video-edit/tts.example.json`)
+  language; see `.claude/skills/video-edit/tts.example.json`, set up for the Duaer model
+  gateway)
 
 ```bash
 pip3 install --user numpy opencv-python Pillow faster-whisper

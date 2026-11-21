@@ -34,7 +34,7 @@ DEFAULT_VOICE = {"say": {"zh": "Tingting", "en": "Samantha"}, "espeak": {"zh": "
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-USER_CONFIG = Path.home() / ".config" / "cutvideo" / "tts.json"
+USER_CONFIG = Path(os.environ.get("CUTVIDEO_TTS_USER_CONFIG", Path.home() / ".config" / "cutvideo" / "tts.json"))
 
 
 def load_config(job_dir: Path | None = None, extra: str | None = None) -> dict:
@@ -51,6 +51,60 @@ def load_config(job_dir: Path | None = None, extra: str | None = None) -> dict:
                 cfg = {}  # a different provider replaces the settings of the previous one
             cfg.update(data)
     return cfg
+
+
+def _ssl_context():
+    """Verified TLS even on python.org macOS builds that ship without CA certificates:
+    certifi if installed, else the system bundle."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    for p in ("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"):
+        if Path(p).exists():
+            return ssl.create_default_context(cafile=p)
+    return ssl.create_default_context()
+
+
+def _open(req, timeout):
+    import urllib.request
+    return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
+
+
+def load_env_file(cfg: dict):
+    """"env_file": "~/.config/duaer/api.env" -> KEY=value lines into the environment (keys
+    stay outside the repo; variables already set win)."""
+    p = cfg.get("env_file")
+    if not p:
+        return
+    p = Path(os.path.expanduser(p))
+    if not p.exists():
+        raise SystemExit(f"tts: env_file {p} not found")
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if ln and not ln.startswith("#") and "=" in ln:
+            k, v = ln.split("=", 1)
+            os.environ.setdefault(k.strip().removeprefix("export ").strip(), v.strip().strip('"').strip("'"))
+
+
+def list_models(cfg: dict) -> list[dict]:
+    """GET {base_url}/models of an OpenAI-compatible provider; speech models flagged."""
+    import urllib.request
+    load_env_file(cfg)
+    base = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
+    key = _env("${" + cfg.get("api_key_env", "OPENAI_API_KEY") + "}")
+    req = urllib.request.Request(base + "/models", headers={"Authorization": f"Bearer {key}"})
+    with _open(req, float(cfg.get("timeout", 30))) as r:
+        data = json.loads(r.read())
+    items = data.get("data", data if isinstance(data, list) else [])
+    out = []
+    for m in items:
+        mid = m.get("id", m) if isinstance(m, dict) else str(m)
+        speech = bool(re.search(r"tts|speech|voice|audio|cosy|sambert|sovits|eleven|minimax-speech", mid, re.I))
+        out.append({"id": mid, "speech": speech, "owned_by": m.get("owned_by", "") if isinstance(m, dict) else ""})
+    return out
 
 
 def for_language(cfg: dict, lang: str) -> dict:
@@ -99,12 +153,16 @@ def _dig(obj, path: str):
 def _http(cfg: dict, text: str, voice, rate, out: Path):
     """Generic / OpenAI-compatible request; writes the returned audio to `out`."""
     import urllib.request
+    load_env_file(cfg)
     if cfg["provider"] == "openai":
         url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/") + "/audio/speech"
         headers = {"Authorization": "Bearer ${" + cfg.get("api_key_env", "OPENAI_API_KEY") + "}",
                    "Content-Type": "application/json"}
-        body = {"model": cfg.get("model", "tts-1"), "input": "${text}", "voice": "${voice}",
+        body = {"model": cfg.get("model", "tts-1"), "input": "${text}",
                 "response_format": cfg.get("format", "wav")}
+        if voice or cfg.get("voice"):  # some models have one built-in voice and reject the field
+            body["voice"] = "${voice}"
+        body.update(cfg.get("extra_body", {}))
         if rate:
             body["speed"] = "${speed}"
         reply = {"type": "audio"}
@@ -116,14 +174,14 @@ def _http(cfg: dict, text: str, voice, rate, out: Path):
     req = urllib.request.Request(_env(url) if "${" in url else url, method=cfg.get("method", "POST"),
                                  data=json.dumps(_fill(body, values), ensure_ascii=False).encode(),
                                  headers=_fill(headers, values))
-    with urllib.request.urlopen(req, timeout=float(cfg.get("timeout", 60))) as r:
+    with _open(req, float(cfg.get("timeout", 60))) as r:
         data = r.read()
     if reply.get("type") == "json":  # audio inside a JSON reply: base64 field or a URL to fetch
         j = json.loads(data)
         if reply.get("base64"):
             data = base64.b64decode(_dig(j, reply["base64"]))
         elif reply.get("url"):
-            with urllib.request.urlopen(_dig(j, reply["url"]), timeout=float(cfg.get("timeout", 60))) as r2:
+            with _open(_dig(j, reply["url"]), float(cfg.get("timeout", 60))) as r2:
                 data = r2.read()
         else:
             raise SystemExit("tts: response type json needs 'base64' or 'url' (a dotted path)")
@@ -236,11 +294,23 @@ def main():
     ap.add_argument("--voices", action="store_true")
     ap.add_argument("--config", default=None, help="extra tts.json to merge on top")
     ap.add_argument("--show-config", action="store_true")
+    ap.add_argument("--list-models", action="store_true",
+                    help="list the models of the configured OpenAI-compatible provider (speech ones marked)")
+    ap.add_argument("--lang", default=None, help="with --list-models: use the provider set for this language")
     a = ap.parse_args()
     cfg = load_config(Path.cwd(), a.config)
     if a.show_config:
         print(json.dumps({k: ("<hidden>" if "key" in k.lower() else v) for k, v in cfg.items()},
                          ensure_ascii=False, indent=1))
+        return
+    if a.list_models:
+        c = for_language(cfg, a.lang) if a.lang else cfg
+        if c.get("provider") != "openai":
+            raise SystemExit("--list-models needs an openai-compatible provider (base_url, api_key_env)")
+        ms = list_models(c)
+        for m in sorted(ms, key=lambda m: (not m["speech"], m["id"])):
+            print(f"{'*' if m['speech'] else ' '} {m['id']}  {m['owned_by']}")
+        print(f"{sum(m['speech'] for m in ms)} speech models (*) of {len(ms)}")
         return
     if a.voices:
         print("\n".join(voices()))

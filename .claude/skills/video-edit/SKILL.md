@@ -280,8 +280,10 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   and ducks music under them. The provider is configurable in `tts.json` (system voice by
   default; OpenAI-compatible or any HTTP API), with a provider/voice per language so
   Chinese lines get a Chinese voice and English lines an English one. See
-  `tts.example.json`; keys come from environment variables. `python3 $S/tts.py --show-config`
-  prints what is in effect.
+  `tts.example.json` (the Duaer model gateway: Fish Audio for Chinese, ElevenLabs for
+  English); keys come from environment variables or an `env_file` outside the repo.
+  `python3 $S/tts.py --show-config` prints what is in effect, `--list-models` what the
+  provider offers. Check a new voice by ear-proxy: synthesise a line and run `qa.py`.
 - Speech clean-up: `"audio": {"voice": "clean"}` (or `"voice"` per clip): `clean`,
   `denoise`, `broadcast`. For talking heads, analyse with `--verbatim` and draft with
   `draft_edl.py --mode jumpcut --drop-fillers` to cut "um / uh / 嗯 / 呃" out.

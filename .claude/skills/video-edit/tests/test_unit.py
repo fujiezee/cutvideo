@@ -273,3 +273,33 @@ def test_fillers_are_cut_out():
 def test_voice_presets_exist():
     for k in ("clean", "denoise", "broadcast"):
         assert "afftdn" in render.VOICE[k]
+
+
+def test_tts_env_file_and_model_list(tmp_path, monkeypatch):
+    import http.server
+    import threading
+    import tts
+    monkeypatch.delenv("FAKE_DUAER_KEY", raising=False)
+    (tmp_path / "api.env").write_text("export FAKE_DUAER_KEY='k-123'\n# comment\n")
+    seen = {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["auth"] = self.headers.get("Authorization")
+            body = json.dumps({"data": [{"id": "cosyvoice-v2", "owned_by": "x"}, {"id": "deepseek-chat"},
+                                        {"id": "gpt-4o-mini-tts"}]}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    cfg = {"provider": "openai", "base_url": f"http://127.0.0.1:{srv.server_port}/v1/",
+           "api_key_env": "FAKE_DUAER_KEY", "env_file": str(tmp_path / "api.env")}
+    ms = {m["id"]: m["speech"] for m in tts.list_models(cfg)}
+    srv.shutdown()
+    assert seen["auth"] == "Bearer k-123"
+    assert ms == {"cosyvoice-v2": True, "deepseek-chat": False, "gpt-4o-mini-tts": True}

@@ -521,8 +521,8 @@ def r_recap(f, P, o):
     if credit:
         texts.append(credit)
     edl = {"output": {"width": 1920, "height": 1080, "fps": 24, "fit": "crop"}, "grade": "trailer", "clips": clips,
-           "music": music_block(o["music"], 0.6, duck=True),
-           "narration": {"items": items, **({"voice": o["voice"]} if o.get("voice") else {}),
+           "music": music_block(o["music"], 0.4, duck=True),  # dense narration needs a quiet bed
+           "narration": {"items": items, "volume": 1.25, **({"voice": o["voice"]} if o.get("voice") else {}),
                          **({"rate": o["rate"]} if o.get("rate") else {})},
            "subtitles": {"enabled": True, "from": "manual", "size": 0.045, "pos": [0.5, 0.88]},
            "texts": texts}

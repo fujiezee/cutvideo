@@ -4,6 +4,7 @@ so the whole suite stays fast."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,9 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+# hermetic: never use the developer's own TTS provider (network, cost) in tests
+os.environ["CUTVIDEO_TTS_USER_CONFIG"] = "/nonexistent/tts.json"
+os.environ.pop("CUTVIDEO_TTS_CONFIG", None)
 sys.path.insert(0, str(SCRIPTS))
 
 

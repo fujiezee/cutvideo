@@ -1,21 +1,12 @@
 {
-  "_comment": "Copy to ~/.config/cutvideo/tts.json (all jobs) or <job>/tts.json (one job). Keys are read from the environment variables named here, never stored in this file.",
-  "provider": "system",
+  "_comment": "Copy to ~/.config/cutvideo/tts.json (all jobs) or <job>/tts.json (one job). The key is read from the environment variable named in api_key_env, loaded from env_file when not set; it is never stored here.",
+  "provider": "openai",
+  "base_url": "https://api.duaer.com/v1",
+  "api_key_env": "DUAER_API_KEY",
+  "env_file": "~/.config/duaer/api.env",
+  "format": "mp3",
   "languages": {
-    "zh": {
-      "provider": "http",
-      "url": "https://YOUR-TTS-ENDPOINT/v1/tts",
-      "headers": {"Authorization": "Bearer ${ZH_TTS_API_KEY}", "Content-Type": "application/json"},
-      "body": {"model": "YOUR-CHINESE-MODEL", "text": "${text}", "voice": "${voice}", "speed": "${speed}", "format": "wav"},
-      "voice": "YOUR-CHINESE-VOICE",
-      "response": {"type": "audio"}
-    },
-    "en": {
-      "provider": "openai",
-      "base_url": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY",
-      "model": "gpt-4o-mini-tts",
-      "voice": "alloy"
-    }
+    "zh": {"model": "fish-audio/s2-pro"},
+    "en": {"model": "eleven_v3", "voice": "JBFqnCBsd6RMkjVDRZzb"}
   }
 }
