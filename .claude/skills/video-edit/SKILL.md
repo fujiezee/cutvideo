@@ -1,6 +1,6 @@
 ---
 name: video-edit
-description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "edit this video", "make a montage", "make a trailer", "cut this down".
+description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros, word-by-word (karaoke) captions, 3D titles, text behind people, three.js light effects, and a style menu of what a film can be cut into. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "立体字", "3D特效", "能剪出哪些风格", "全剪", "多种风格", "edit this video", "make a montage", "make a trailer", "cut this down".
 ---
 
 # Video edit
@@ -68,6 +68,28 @@ credits, slates and test footage (`--exclude`, seconds). Then check the top styl
 what you saw, drop or add styles by judgment, and present the menu: per style one line of
 "what it would be" (story / look), format and length, and what is missing. Offer to cut
 several; each chosen style then gets its own plan (step 3).
+
+### 2c. Several styles at once: auto drafts
+
+When the user picks several styles (or says "cut them all"), get first drafts in one run:
+
+```bash
+python3 $S/autocut.py $J/work/analysis.json --styles trailer,beatmix,vhs [--exclude 588-708] \
+    [--music song.mp3 | --no-music] [--title "Name"] [--credit "attribution"] [--draft]
+```
+
+`--styles` takes a list or `recommended` / `top3` / `all`. Recipes exist for `trailer`,
+`beatmix`, `cast`, `karaoke`, `vhs`, `silent`, `cyberpunk`. Each recipe picks shots from the
+style features (every piece lies inside one detected shot, so no flash frames), writes
+`$J/auto/edl_<style>.json`, renders `$J/out/auto_<style>_<aspect>.mp4` with `--qa`, and
+the run ends with `$J/auto/report.md` (length, QA, notes per style) and
+`$J/auto/compare.jpg` (six frames per style). Without `--music`, the footage's longest
+stretch of music with no speech (score, credits) is extracted and used.
+
+These are drafts, not deliverables. Open `compare.jpg` and each review sheet, read the
+notes (placeholder names, line choice, missing music), then refine every EDL you keep:
+real names, a story order for the lines, the strongest shots, text. Render again with
+`--qa` and hand over only what passes your own review (step 6).
 
 ### 3. Design the edit: write `$J/plan.md` before any EDL
 

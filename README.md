@@ -101,8 +101,21 @@ python3 $S/render.py edits/demo/edl.json           # final
   neon grid) composited like a screen blend
 - **Style menu:** scores what a film can be cut into (trailer, cast intros, silent film,
   cyberpunk, ...) with the shots that support each style
+- **Auto drafts:** one command cuts first drafts of several styles from the same footage,
+  renders and checks them, and lays them side by side for review
 
 Text is drawn with Pillow, so ffmpeg builds without `drawtext` or `libass` work.
+
+## Tests
+
+```bash
+cd .claude/skills/video-edit && python3 -m pytest tests -q
+```
+
+The suite builds a 24-second synthetic clip, analyses it once, and checks the pure logic
+(caption matching, format derivation, intro snapping, 3D text, shot picking) and the
+pipeline end to end (render, formats, loudness and true peak, style menu, auto drafts).
+It needs `pytest` and runs in about 20 seconds; no speech model is used.
 
 ## Docs
 

@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter, ImageFont
 
-from common import ffmpeg, find_font, load_font, log
+from common import ffmpeg, find_font, load_font, log, probe
 
 VERSION = 4  # bump when the look changes so cached clips re-render
 
@@ -307,12 +307,20 @@ def apply_intro(clip_mp4: Path, spec: dict, fps: float, work: Path, enc: list, f
     """Splice a freeze-frame intro into a rendered (video-only) clip. Returns the added seconds."""
     at = float(spec.get("at", 0.5))
     hold = float(spec.get("hold", 1.8))
+    dur = probe(clip_mp4)["duration"]
+    last = at > dur - 2.0 / fps
+    if last:  # freeze point past the clip: use its last frame
+        log(f"intro '{spec.get('name', '')}': at {at}s is past the {dur:.2f}s clip, freezing the last frame")
+        at = max(0.0, dur - 1.0 / fps)
     work = Path(work)
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
     still = work / "still.png"
-    ffmpeg(["-ss", f"{at:.3f}", "-i", str(clip_mp4), "-frames:v", "1", str(still)])
+    if last:  # seeking to the very end returns nothing: decode the tail, keep the final frame
+        ffmpeg(["-sseof", "-0.5", "-i", str(clip_mp4), "-update", "1", str(still)])
+    else:
+        ffmpeg(["-ss", f"{at:.3f}", "-i", str(clip_mp4), "-frames:v", "1", str(still)])
     frame = Image.open(still).convert("RGB")
     n = render_intro_frames(frame, spec, fps, work / "frames", font_path)
     tmp = clip_mp4.with_name(clip_mp4.stem + ".intro.mp4")

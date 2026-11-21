@@ -1009,7 +1009,9 @@ def main():
     # 4) audio: clip audio placed on the timeline (J/L cuts), music, sound effects
     vin = sum(1 for x in inputs if x == "-i")
     base_vol = float(edl.get("audio", {}).get("clip_volume", 1.0))
-    flagged = [i for i, c in enumerate(edl["clips"]) if c.get("duck_music")]
+    # side-chain only when some music track actually ducks (else the split output dangles)
+    ducking = any(m.get("duck") for m in edl.get("music", []))
+    flagged = [i for i, c in enumerate(edl["clips"]) if c.get("duck_music")] if ducking else []
     clip_tracks, side_tracks = [], []
     for i, (c, r, t) in enumerate(zip(edl["clips"], rendered, timeline)):
         au = r.get("audio")

@@ -94,6 +94,7 @@ def features(an: dict, work: Path, exclude=()) -> dict:
         "duration": total, "shots": len(shots), "avg_shot": total / n,
         "speech_ratio": min(1.0, (said if has_tr else 0.5 * speech) / max(total, 1)),
         "lines": lines,
+        "all": shots,
         "action": [s for s in shots if s.get("motion", 0) > 0.11 and s["dur"] >= 0.8],
         "faces_any": [s for s in shots if s["faces"] >= 1],
         "closeups": [s for s in shots if s["faces"] == 1 and s["face_area"] > 0.035],

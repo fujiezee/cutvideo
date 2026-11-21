@@ -1,0 +1,91 @@
+"""End to end on the synthetic clip: analyse, render, formats, loudness, style menu, autocut."""
+from __future__ import annotations
+
+import json
+import sys
+
+import qa
+from conftest import SCRIPTS, probe, render, run
+from styles import catalogue, features
+
+
+def test_analyze_finds_the_cuts(analysis):
+    sc = analysis["videos"][0]["scenes"]
+    starts = [s["start"] for s in sc[1:]]
+    assert len(sc) == 8, starts
+    for want, got in zip(range(3, 24, 3), starts):
+        assert abs(want - got) < 0.1
+
+
+def test_render_vertical_draft(job):
+    edl = {"analysis": "work/analysis.json",
+           "output": {"path": "out/basic.mp4", "width": 360, "height": 640, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 0.5, "out": 2.5, "focus": "auto"},
+                     {"src": "v1", "in": 3.5, "out": 5.5, "transition": {"type": "fade", "duration": 0.3}},
+                     {"type": "color", "color": "#000000", "duration": 1.0}],
+           "texts": [{"text": "Hello", "clip": 0, "start": 0.2, "end": 1.5, "style": "title"},
+                     {"text": "3D", "clip": 1, "start": 0.0, "end": 1.5, "style": "text3d"}]}
+    rep = render(edl, job, "edl_basic", "--draft")
+    p = probe(rep["output"])
+    assert (p["w"], p["h"]) == (180, 320)            # drafts render at half size
+    assert abs(p["dur"] - 4.7) < 0.15 and p["audio"]
+
+
+def test_final_render_meets_loudness_and_peak(job):
+    edl = {"analysis": "work/analysis.json",
+           "output": {"path": "out/loud.mp4", "width": 320, "height": 180, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 0.0, "out": 4.0, "volume": 6.0}]}
+    rep = render(edl, job, "edl_loud")
+    m = qa.loudness(rep["output"])
+    assert m["true_peak_dbfs"] <= -0.9
+    assert abs(m["integrated_lufs"] + 14) <= 2
+
+
+def test_formats_render_every_aspect(job):
+    edl = {"analysis": "work/analysis.json",
+           "output": {"path": "out/fmt.mp4", "width": 640, "height": 360, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 0.2, "out": 1.8}, {"src": "v1", "in": 6.2, "out": 7.8}]}
+    p = job / "edl_fmt.json"
+    p.write_text(json.dumps(edl))
+    r = run(sys.executable, SCRIPTS / "render.py", p, "--formats", "9:16,1:1", "--draft", "--no-review", cwd=job)
+    outs = json.loads(r.stdout[r.stdout.rindex('{\n "formats"'):])["formats"]
+    dims = {k: probe(job / v.replace(".mp4", "_draft.mp4")) if not (job / v).exists() else probe(job / v)
+            for k, v in outs.items()}
+    assert (dims["9:16"]["w"], dims["9:16"]["h"]) == (540, 960)   # drafts: half size
+    assert (dims["1:1"]["w"], dims["1:1"]["h"]) == (540, 540)
+
+
+def test_style_menu_scores_every_style(job, analysis):
+    f = features(analysis, job / "work")
+    styles = catalogue(f)
+    keys = {s["key"] for s in styles}
+    assert {"trailer", "beatmix", "cast", "karaoke", "vhs", "silent", "cyberpunk"} <= keys
+    assert all(0 <= s["score"] <= 100 for s in styles)
+    assert f["shots"] == 8 and len(f["all"]) == 8
+
+
+def test_autocut_drafts_render(job):
+    r = run(sys.executable, SCRIPTS / "autocut.py", job / "work" / "analysis.json", "--styles", "vhs,cyberpunk",
+            "--no-music", "--draft", "--title", "Test", cwd=job)
+    rep = json.loads((job / "auto" / "report.json").read_text())
+    by = {x["style"]: x for x in rep["styles"]}
+    for st in ("vhs", "cyberpunk"):
+        assert by[st].get("video"), (st, by[st].get("error"), r.stderr[-1500:])
+        p = probe(by[st]["video"])
+        assert p["dur"] > 3
+    assert (job / "auto" / "compare.jpg").exists()
+    # every clip lies inside one detected shot
+    sc = json.loads((job / "work" / "analysis.json").read_text())["videos"][0]["scenes"]
+    for st in ("vhs", "cyberpunk"):
+        for c in json.loads((job / "auto" / f"edl_{st}.json").read_text())["clips"]:
+            if c.get("type", "video") == "video":
+                assert any(s["start"] <= c["in"] and c["out"] <= s["end"] for s in sc), c
+
+
+def test_intro_past_clip_end_freezes_last_frame(job):
+    edl = {"analysis": "work/analysis.json",
+           "output": {"path": "out/intro.mp4", "width": 320, "height": 180, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 3.2, "out": 3.9,
+                      "effects": [{"type": "intro", "at": 1.0, "hold": 1.0, "name": "A", "box": [0, 0, 1, 1]}]}]}
+    rep = render(edl, job, "edl_intro", "--draft")
+    assert probe(rep["output"])["dur"] > 1.5
