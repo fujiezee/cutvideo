@@ -8,6 +8,21 @@ It handles talking-head jump cuts, vlogs, highlight montages, beat-synced shorts
 trailers, cast intros, and product or event recaps, with subtitles, transitions, effects,
 colour grading, titles and background music.
 
+## Gallery
+
+Eight edits of the open movie *Tears of Steel*, one style each, all made by Claude with this
+skill from the film alone. Click a thumbnail to download the video; the edit plans and build
+scripts are in [`examples/tears-of-steel/`](examples/tears-of-steel/).
+
+<table>
+<tr><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_trailer_16x9.mp4"><img src="examples/tears-of-steel/gallery/tos_trailer_16x9.jpg" width="260" alt="Trailer"></a><br><b>Trailer</b><br><sub>16:9 · 1:11</sub></td><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_cast_16x9.mp4"><img src="examples/tears-of-steel/gallery/tos_cast_16x9.jpg" width="260" alt="Cast intros"></a><br><b>Cast intros</b><br><sub>16:9 · 0:35</sub></td><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_cyberpunk_16x9.mp4"><img src="examples/tears-of-steel/gallery/tos_cyberpunk_16x9.jpg" width="260" alt="Cyberpunk glitch"></a><br><b>Cyberpunk glitch</b><br><sub>16:9 · 0:41</sub></td></tr>
+<tr><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_vhs_4x3.mp4"><img src="examples/tears-of-steel/gallery/tos_vhs_4x3.jpg" width="260" alt="Retro VHS"></a><br><b>Retro VHS</b><br><sub>4:3 · 0:39</sub></td><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_silent_4x3.mp4"><img src="examples/tears-of-steel/gallery/tos_silent_4x3.jpg" width="260" alt="Silent film"></a><br><b>Silent film</b><br><sub>4:3 · 0:46</sub></td></tr>
+<tr><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_trailer_9x16.mp4"><img src="examples/tears-of-steel/gallery/tos_trailer_9x16.jpg" width="150" alt="Trailer, vertical"></a><br><b>Trailer, vertical</b><br><sub>9:16 · 1:11</sub></td><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_karaoke_9x16.mp4"><img src="examples/tears-of-steel/gallery/tos_karaoke_9x16.jpg" width="150" alt="Word-highlight captions"></a><br><b>Word-highlight captions</b><br><sub>9:16 · 0:26</sub></td><td align="center"><a href="https://github.com/fujiezee/cutvideo/releases/download/showcase-v1/tos_beatmix_9x16.mp4"><img src="examples/tears-of-steel/gallery/tos_beatmix_9x16.jpg" width="150" alt="Beat-sync mix"></a><br><b>Beat-sync mix</b><br><sub>9:16 · 0:20</sub></td></tr>
+</table>
+
+<sub>*Tears of Steel* © Blender Foundation · [mango.blender.org](https://mango.blender.org) ·
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)</sub>
+
 ## Requirements
 
 - `ffmpeg` / `ffprobe`
@@ -66,7 +81,7 @@ python3 $S/render.py edits/demo/edl.json           # final
 - **Effects:** Ken Burns zoom, punch-in, shake, flash, glitch, freeze frame, reverse, speed
   change, black and white, blur, grain, vignette, ghost trails
 - **Grades:** natural, vivid, cinematic, teal_orange, warm, cool, moody, vintage, film, bw,
-  fade, bright, or a `.cube` LUT
+  fade, bright, trailer, vhs, silent, cyberpunk, or a `.cube` LUT; per-shot colour matching
 - **Text:** title, caption, highlight, lower third, label, tag, quote; fade, pop, slide and
   typewriter animations; per-word colour highlights; CJK fonts
 - **Subtitles:** built from the transcript and kept in sync across cuts and speed changes;
@@ -76,8 +91,9 @@ python3 $S/render.py edits/demo/edl.json           # final
   (boom, hit, whoosh, riser, ...), beat sync, cuts pinned to music hits, loudness and
   true-peak control
 - **Planning:** a written edit plan (structure, music map, look, text) before any render
-- **Framing:** crop with a focus point, blurred background fill, or letterbox for any aspect
-  ratio
+- **Framing:** crop with a focus point or automatic face-centred focus, blurred background
+  fill, or letterbox for any aspect ratio
+- **Looks:** scan lines, projector flicker, intertitle cards, neon and camcorder-stamp text
 
 Text is drawn with Pillow, so ffmpeg builds without `drawtext` or `libass` work.
 
