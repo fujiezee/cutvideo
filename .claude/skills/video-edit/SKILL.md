@@ -132,13 +132,32 @@ faces, subtitle accuracy (fix misheard words with `subtitles.replace`), black/fr
 pacing, grade consistency. Also re-read `$J/.render/subtitles.json` against the transcript.
 Fix and re-render. Do at least one review pass before reporting.
 
-You cannot hear the result, so verify audio by measurement: integrated loudness and true peak
-(`ffmpeg -i out.mp4 -af ebur128=peak=true -f null -`, target about -14 LUFS / ≤ -1 dBFS),
-momentary loudness at each dialogue line and hit (quiet dialogue needs more `volume`), and
-the `--plan` / `last_render.json` timeline against the music hits you targeted. Say in the
-handoff that the mix was checked by measurement, and ask the user to listen.
+You cannot hear the result, so the final render must run with `--qa`:
+
+```bash
+python3 $S/render.py $J/edl.json --qa      # or: python3 $S/qa.py OUT.mp4 --subs $J/.render/subtitles.json
+```
+
+It measures loudness (target about -14 LUFS) and true peak (≤ -1 dBFS), lists long silences,
+and re-transcribes the output to check that every caption is still recognisable in the mix.
+A line below 60 % is probably masked by music/SFX, too quiet, or chopped by a cut or a
+freeze: raise the clip `volume`, lower or duck the music, move the cut, then re-run. Read
+`.render/qa.json` (it shows what was heard) before deciding: a mismatch can also be an ASR
+slip or a wrong caption. Also check the `--plan` / `last_render.json` timeline against the
+music hits you targeted. Say in the handoff that the mix was checked by measurement and
+ask the user to listen.
 
 ### 6. Deliver
+
+Other platforms from the same edit:
+
+```bash
+python3 $S/render.py $J/edl.json --formats 16:9,9:16,1:1 --qa
+```
+
+Each format gets its own output (`name_9x16.mp4`, ...): narrower targets switch to
+face-tracked crops, captions are re-placed and re-wrapped, intro boxes are re-detected.
+Put per-format tweaks under `"formats": {"9:16": {...}}` in the EDL and review every format.
 
 Give the user: the output path, length/format, a 3-6 line description of the cut (story,
 key moments used, effects, music), the `.srt` path if subtitles were made, and anything in
@@ -187,5 +206,10 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   slower pacing.
 - This ffmpeg build may lack `drawtext`/`libass`; all text is drawn by Pillow, so any font
   that Pillow can open works (`output.font` or per-text `font`).
-- Vertical output from horizontal footage: `fit: "crop"` with `focus: [x, y]` (0..1) to keep
-  the subject in frame, or `fit: "blur"` to keep the whole picture.
+- Vertical output from horizontal footage: `fit: "crop"` with `focus: "track"` (the crop pans
+  to follow the main face, or the body in wider shots; `track_hint: "left"|"right"|x` picks
+  the person in a two-shot), `"auto"` (one static face-centred position), or `[x, y]`; or
+  `fit: "blur"` to keep the whole picture. Tracking falls back to a static crop when people
+  are found in fewer than 30 % of samples (very wide shots): set `focus` by hand there.
+- Freeze-frame intros are moved out of words automatically (the audio pauses during the
+  freeze); the log says when.

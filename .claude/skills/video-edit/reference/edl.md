@@ -43,6 +43,11 @@ Video clip:
 - `focus`: crop position for `fit: crop`, 0..1 (x, y) of the overflow (0.5 = centre). Use it to
   keep faces in a 9:16 crop. `"auto"` centres the crop on the largest face found in three
   sampled frames (slight headroom), falling back to the centre when no face is found.
+  `"track"` follows the main person through the clip: faces (or full bodies in wide shots)
+  sampled at ~6 fps, identity kept between samples, median-filtered, with a dead zone and
+  eased follow like a camera operator. `track_hint`: `left` | `center` | `right` | x (0..1)
+  chooses whom to follow when several people are in frame. Falls back to `"auto"` when
+  people are found in fewer than 30 % of samples.
 - `transition`: how this clip enters from the previous one. Omit for a hard cut.
 - `adjust`: per-clip colour correction applied before the shared grade, to match shots:
   `{"temperature": 5600, "temperature_mix": 0.5, "brightness": 0.03, "contrast": 1.05,
@@ -106,7 +111,8 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
  "cutout": true, "sfx": "hit", "sfx_volume": 0.7}
 ```
 
-At `at` seconds into the clip the picture freezes for `hold` seconds (the clip becomes that
+If the transcript shows `at` falls inside a word, the freeze moves to the nearest pause
+within 0.8 s (logged); `"snap": false` keeps it exactly. At `at` seconds into the clip the picture freezes for `hold` seconds (the clip becomes that
 much longer; its audio pauses; a `hit` + whoosh play unless `"sfx": null`). The frozen frame:
 background `bg` = `bw` | `dark` | `tint` | `blur`; the person cut out in colour with a white
 outline and an accent glow; an accent panel (`color`) slides in with `name`, `role` and an
@@ -269,6 +275,22 @@ absorbs the difference:
 
 `start_at_music` is seconds in the song (`pin_music`: index, default 0) and accounts for its
 `offset`/`start`. Pins are applied after beat sync.
+
+## Formats
+
+`render.py EDL --formats 16:9,9:16,1:1` renders one output per aspect ratio (`16:9`, `9:16`,
+`1:1`, `4:5`, `4:3`) from the same edit. Overrides per format (deep-merged):
+
+```json
+"formats": {"9:16": {"output": {"fit": "blur"}, "subtitles": {"size": 0.06}}}
+```
+
+## QA
+
+`render.py EDL --qa` (or `qa.py OUT.mp4 --subs .render/subtitles.json`) writes
+`.render/qa.json`: loudness, true peak, silences ≥ 1.5 s, and per caption the share of its
+words the recogniser hears in the final mix (`recall`, with what was heard). Captions below
+0.6 are reported as hard to hear.
 
 `render.py EDL --plan` prints the resolved timeline (after beat sync and pins) without
 rendering. Clips render to an exact frame count, so the plan matches the output to the frame.

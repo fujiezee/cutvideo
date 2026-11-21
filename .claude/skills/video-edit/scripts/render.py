@@ -100,7 +100,10 @@ def fit_chain(mode: str, W: int, H: int, focus=(0.5, 0.5), bg="black") -> tuple[
                 f"gblur=sigma=28,eq=brightness=-0.08:saturation=0.9[bgb];"
                 f"[fg]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos[fgs];"
                 f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2"), True
-    # crop (fill)
+    # crop (fill); focus may be offsets (0..1 of the overflow) or pixel expressions of t
+    if isinstance(fx, str):
+        return (f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
+                f"crop={W}:{H}:{fx}:{fy}"), False
     return (f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop={W}:{H}:(iw-{W})*{fx}:(ih-{H})*{fy}"), False
 
@@ -217,6 +220,43 @@ def auto_focus(clip: dict, W: int, H: int, ctx: dict) -> list[float]:
     return [round(frac(cx, iw, W), 3), round(frac(cy, ih, H, 0.12), 3)]
 
 
+def snap_intros_to_pauses(edl: dict, analysis: dict | None, reach: float = 0.8, min_gap: float = 0.12):
+    """Move a freeze-frame intro out of the middle of a word: the audio pauses during the
+    freeze, so freezing mid-speech chops a word. Uses transcript word timings; `"snap": false`
+    on the intro keeps the given `at`."""
+    if not analysis:
+        return
+    by_path = {v["path"]: v for v in analysis.get("videos", [])}
+    for c in edl["clips"]:
+        spec = next((e for e in c.get("effects", []) if e.get("type") == "intro"), None)
+        v = by_path.get(c.get("path"))
+        if not spec or spec.get("snap") is False or not v or not v.get("transcript"):
+            continue
+        a = float(c.get("in", 0))
+        b = float(c["out"]) if c.get("out") is not None else a + float(c.get("dur", 2))
+        sp = float(c.get("speed", 1.0))
+        words = sorted((w["start"], w["end"]) for s_ in v["transcript"]["segments"] for w in s_.get("words", [])
+                       if w["end"] > a and w["start"] < b)
+        at_src = a + float(spec.get("at", 0.5)) * sp
+        busy = any(ws - 0.05 <= at_src <= we + 0.02 for ws, we in words)
+        if not busy:
+            continue
+        # candidate freeze points: inside pauses between words (and before the first / after the last)
+        edges = [a] + [x for w in words for x in w] + [b]
+        cands = []
+        for g0, g1 in zip(edges[0::2], edges[1::2]):
+            if g1 - g0 >= min_gap:
+                cands.append(min(g0 + 0.06, (g0 + g1) / 2))
+        cands = [t for t in cands if abs(t - at_src) <= reach and a + 0.1 <= t <= b - 0.1]
+        if not cands:
+            log(f"intro '{spec.get('name', '')}': freeze at {spec.get('at')}s falls inside speech; no pause nearby")
+            continue
+        new = min(cands, key=lambda t: abs(t - at_src))
+        old = spec.get("at", 0.5)
+        spec["at"] = round((new - a) / sp, 3)
+        log(f"intro '{spec.get('name', '')}': freeze moved {old}s -> {spec['at']}s (out of a word)")
+
+
 def intro_of(clip: dict, fps: float):
     """(spec, at, hold) of the clip's freeze-frame intro, hold rounded to whole frames; or None."""
     spec = next((e for e in clip.get("effects", []) if e.get("type") == "intro"), None)
@@ -238,14 +278,14 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     grade = clip.get("grade", ctx["grade"] if clip.get("type", "video") != "color" else "none")
     fit = clip.get("fit", ctx["fit"])
     focus = clip.get("focus", [0.5, 0.5])
-    if focus == "auto":
-        focus = auto_focus(clip, W, H, ctx) if kind == "video" else [0.5, 0.5]
-
     vclip = {k: v for k, v in clip.items() if k not in AUDIO_KEYS}  # audio tweaks must not re-encode video
     iv = 0
     if any(e.get("type") == "intro" for e in effects):
         import intro as _intro
         iv = f"{_intro.VERSION}-{_intro.backend()}"  # re-render when the cut-out backend changes
+    if clip.get("focus") == "track":
+        import reframe as _rf
+        iv = f"{iv}-track{_rf.VERSION}"
     key = hashlib.sha1(json.dumps({"c": vclip, "W": W, "H": H, "fps": fps, "g": grade, "fit": fit,
                                    "q": ctx["clip_q"], "v": 6, "iv": iv}, sort_keys=True).encode()).hexdigest()[:12]
     out = ctx["clip_dir"] / f"c{i:03d}_{key}.mp4"
@@ -278,6 +318,25 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
 
     if out.exists():
         return {"path": str(out), "duration": probe(out)["duration"], "cached": True, "audio": audio}
+
+    if focus == "track" and (kind != "video" or fit != "crop" or "reverse" in names):
+        focus = "auto"
+    if focus == "track":
+        from reframe import track_crop
+        info_ = ctx["probe"](clip["path"])
+        a_ = float(clip.get("in", 0))
+        b_ = float(clip["out"]) if clip.get("out") is not None else a_ + float(clip.get("dur", 2))
+        hint = clip.get("track_hint")
+        hint = {"left": 0.25, "center": 0.5, "right": 0.75}.get(hint, hint)
+        tr = track_crop(clip["path"], a_, b_, speed, W, H, info_["width"], info_["height"],
+                        hint=float(hint) if hint is not None else None)
+        if tr:
+            focus = [tr[0], tr[1]]
+            log(f"focus track {Path(clip['path']).name} {a_:.1f}-{b_:.1f}: {tr[2]}")
+        else:
+            focus = "auto"
+    if focus == "auto":
+        focus = auto_focus(clip, W, H, ctx) if kind == "video" else [0.5, 0.5]
 
     vf = []
     if "reverse" in names:
@@ -731,14 +790,29 @@ def build_subtitles(edl: dict, timeline: list[dict], analysis: dict | None) -> l
     # captions pause while a freeze-frame intro is on screen
     holds = [(t["out_start"] + t["intro_at"], t["out_start"] + t["intro_at"] + t["intro_hold"])
              for t in timeline if t.get("intro_at") is not None]
+    def part(it, keep, start, end):
+        """Caption limited to the words in `keep` (word-timed captions), else the full text."""
+        if not it.get("words"):
+            return {**it, "start": start, "end": end}
+        if not keep:
+            return None
+        s0, e0 = keep[0]["s"], keep[-1]["e"]
+        return {**it, "start": start, "end": end, "text": it["text"][s0:e0],
+                "words": [{**w, "s": w["s"] - s0, "e": w["e"] - s0} for w in keep]}
+
     for h0, h1 in holds:
         split = []
         for it in items:
             if it["start"] < h1 and it["end"] > h0:
+                ws = it.get("words") or []
                 if it["start"] < h0 - 0.15:
-                    split.append({**it, "end": h0})
+                    p_ = part(it, [w for w in ws if w["t0"] < h0], it["start"], h0)
+                    if p_:
+                        split.append(p_)
                 if it["end"] > h1 + 0.15:
-                    split.append({**it, "start": h1})
+                    p_ = part(it, [w for w in ws if w["t0"] >= h0], h1, it["end"])
+                    if p_:
+                        split.append(p_)
             else:
                 split.append(it)
         items = split
@@ -760,9 +834,17 @@ def main():
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--no-review", action="store_true")
     ap.add_argument("--plan", action="store_true", help="print the planned timeline (after beat sync/pins) and exit")
+    ap.add_argument("--formats", default=None,
+                    help="render the edit for several aspect ratios, e.g. 16:9,9:16,1:1 (see derive_format)")
+    ap.add_argument("--qa", action="store_true", help="after rendering, check loudness, peaks, silences and whether "
+                    "every caption is still intelligible in the mix (re-transcribes the output)")
     args = ap.parse_args()
 
     edl_path = Path(args.edl).resolve()
+    if args.formats:
+        flags = [f for f, on in (("--draft", args.draft), ("--no-review", args.no_review), ("--qa", args.qa)) if on]
+        render_formats(edl_path, [f.strip() for f in args.formats.split(",") if f.strip()], flags)
+        return
     base = edl_path.parent
     edl = load_json(edl_path)
     analysis = None
@@ -805,6 +887,7 @@ def main():
         if not snd.get("sfx"):
             snd["path"] = resolve_src(snd.get("src") or snd["path"], analysis, base)
 
+    snap_intros_to_pauses(edl, analysis)
     apply_beat_sync(edl, analysis, base)
     apply_pins(edl)
     save_json(edl, work / "resolved_edl.json")  # after beat sync + pins: the exact in/out points rendered
@@ -1022,6 +1105,13 @@ def main():
     save_json(subs, work / "subtitles.json")
     if subs:
         write_srt(subs, out_path.with_suffix(".srt"))
+    if args.qa:
+        from qa import qa as run_qa
+        lang = None
+        if analysis:
+            langs = [v["transcript"]["language"] for v in analysis.get("videos", []) if v.get("transcript")]
+            lang = langs[0] if langs else None
+        report["qa"] = run_qa(str(out_path), str(work / "subtitles.json"), lang=lang)["summary"]
     if not args.no_review:
         from preview import review_sheet
         report["review"] = review_sheet(str(out_path), [t["out_start"] for t in timeline], work / "review")
@@ -1050,6 +1140,78 @@ def fix_loudness(path: Path, target: float):
             "-movflags", "+faststart", str(tmp)])
     tmp.replace(path)
     log(f"loudness {measured:.1f} LUFS / peak {peak:.1f} dBFS -> ~{target:.0f} LUFS, peaks limited")
+
+
+FORMATS = {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080), "4:5": (1080, 1350),
+           "4:3": (1440, 1080)}
+CAPTION_POS = {"16:9": [0.5, 0.88], "9:16": [0.5, 0.72], "1:1": [0.5, 0.84], "4:5": [0.5, 0.8], "4:3": [0.5, 0.86]}
+CAPTION_CHARS = {"16:9": 22, "9:16": 13, "1:1": 16, "4:5": 15, "4:3": 20}
+
+
+def _deep_merge(a: dict, b: dict) -> dict:
+    out = dict(a)
+    for k, v in b.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def derive_format(edl: dict, fmt: str, src_vertical: bool) -> dict:
+    """The same edit for another aspect ratio: tracked crops when the target is narrower than
+    the footage, blurred fill when it is wider, captions placed and wrapped for the format,
+    person boxes re-detected. `edl["formats"][fmt]` overrides anything (deep merge)."""
+    import copy
+    W, H = FORMATS[fmt]
+    v = copy.deepcopy(edl)
+    v.pop("formats", None)
+    o = v.setdefault("output", {})
+    same = (int(o.get("width", 0)), int(o.get("height", 0))) == (W, H)
+    tag = fmt.replace(":", "x")
+    p = Path(o.get("path", "output.mp4"))
+    stem = re.sub(r"_(16x9|9x16|1x1|4x5|4x3)$", "", p.stem)
+    o["path"] = str(p.with_name(f"{stem}_{tag}{p.suffix}"))
+    if not same:
+        o["width"], o["height"] = W, H
+        narrower = W / H < (9 / 16 if src_vertical else 16 / 9) - 0.01
+        o["fit"] = "crop" if (narrower or fmt == "1:1") else ("blur" if src_vertical else o.get("fit", "crop"))
+        for c in v["clips"]:
+            c.pop("fit", None)
+            if o["fit"] == "crop" and c.get("type", "video") == "video":
+                c["focus"] = "track"
+            for e in c.get("effects", []):
+                if e.get("type") == "intro":
+                    e.pop("box", None)  # output-frame coordinates of the old format
+        sub = v.get("subtitles")
+        if sub:
+            sub["pos"] = CAPTION_POS[fmt]
+            sub["max_chars"] = CAPTION_CHARS[fmt]
+            for it in sub.get("items", []):
+                if "pos" in it:
+                    it["pos"] = CAPTION_POS[fmt]
+    return _deep_merge(v, (edl.get("formats") or {}).get(fmt, {}))
+
+
+def render_formats(edl_path: Path, formats: list[str], passthrough: list[str]):
+    import subprocess
+    edl = load_json(edl_path)
+    an = edl.get("analysis")
+    src_vertical = False
+    if an:
+        ap_ = Path(an) if Path(an).is_absolute() else edl_path.parent / an
+        vids = load_json(ap_).get("videos", [])
+        src_vertical = bool(vids) and vids[0].get("height", 0) > vids[0].get("width", 1)
+    outs = []
+    for fmt in formats:
+        if fmt not in FORMATS:
+            raise SystemExit(f"unknown format {fmt}; options: {', '.join(FORMATS)}")
+        var = derive_format(edl, fmt, src_vertical)
+        vp = edl_path.with_name(f".{edl_path.stem}.{fmt.replace(':', 'x')}.json")
+        save_json(var, vp)
+        log(f"== {fmt}: {var['output']['path']}")
+        r = subprocess.run([sys.executable, __file__, str(vp), *passthrough])
+        if r.returncode:
+            raise SystemExit(f"{fmt} failed")
+        outs.append(var["output"]["path"])
+    print(json.dumps({"formats": dict(zip(formats, outs))}, indent=1))
 
 
 def write_srt(subs: list[dict], path: Path):

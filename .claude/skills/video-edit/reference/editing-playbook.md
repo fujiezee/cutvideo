@@ -62,7 +62,8 @@ Pick the recipe that matches the footage and the ask, then adapt it. Rules of th
 
 1. 9:16, 7-30 s. First frame must already be interesting (no fade in from black).
 2. Hook text in the first second (`title` or `highlight`, `pop`).
-3. Cuts every 0.4-1.0 s, locked to beats. `fit: "crop"` with `focus` on the subject.
+3. Cuts every 0.4-1.0 s, locked to beats. `fit: "crop"` with `focus: "track"` so the
+   subject stays in frame when they move.
 4. End on a loopable or punchy frame; optional `tag` CTA in the last 1.5 s.
 
 ## Product / event / recap

@@ -91,8 +91,10 @@ python3 $S/render.py edits/demo/edl.json           # final
   (boom, hit, whoosh, riser, ...), beat sync, cuts pinned to music hits, loudness and
   true-peak control
 - **Planning:** a written edit plan (structure, music map, look, text) before any render
-- **Framing:** crop with a focus point or automatic face-centred focus, blurred background
-  fill, or letterbox for any aspect ratio
+- **Framing:** face-tracking crops that pan with the subject, static face-centred or manual
+  focus, blurred background fill, or letterbox; one edit exported to 16:9 / 9:16 / 1:1 / 4:5
+- **Self-check:** after rendering, the output is re-transcribed to confirm every caption is
+  still intelligible in the mix, plus loudness, true-peak and silence checks
 - **Looks:** scan lines, projector flicker, intertitle cards, neon and camcorder-stamp text
 
 Text is drawn with Pillow, so ffmpeg builds without `drawtext` or `libass` work.
