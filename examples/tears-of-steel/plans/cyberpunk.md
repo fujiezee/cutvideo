@@ -14,7 +14,7 @@ Logline: the scientists overwrite a robot's memory, and the system fights back.
 | 5 | Credit | black | - | attribution |
 
 ## Music
-Credits score from 0 s; `beat_sync` every 2 beats with `shift: auto`; the line in clip 3
+Credits score from 0 s; `beat_sync` every 2 beats with `shift: auto`; the line in clip 2
 ducks the music.
 
 ## Look

@@ -1087,8 +1087,14 @@ def main():
 
     fg_path = work / "graph.txt"
     fg_path.write_text(";\n".join(parts), encoding="utf-8")
+    # cap the bitrate: grain/noise looks (vhs, silent, film, grain) barely compress and would
+    # otherwise reach 70-90 Mbps at crf 18 (hundreds of MB for a 40 s clip)
+    px = W * H * fps
+    cap = o.get("maxrate") or (f"{max(4, round(px / (1920 * 1080 * 30) * 10))}M")
+    rate = ["-maxrate", str(cap), "-bufsize", f"{int(str(cap).rstrip('Mk')) * 2}M"] if str(cap).endswith("M") \
+        else ["-maxrate", str(cap), "-bufsize", str(cap)]
     enc = (["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28"] if args.draft else
-           ["-c:v", "libx264", "-preset", o.get("preset", "medium"), "-crf", str(o.get("crf", 18))])
+           ["-c:v", "libx264", "-preset", o.get("preset", "medium"), "-crf", str(o.get("crf", 18)), *rate])
     log(f"final render -> {out_path} ({fmt_ts(total)})")
     ffmpeg([*inputs, "-filter_complex_script", str(fg_path), "-map", "[vout]", "-map", "[aout]",
             "-t", f"{total:.3f}", *enc, "-pix_fmt", "yuv420p", "-r", str(fps),
@@ -1118,28 +1124,46 @@ def main():
     print(json.dumps(report, ensure_ascii=False, indent=1))
 
 
-def fix_loudness(path: Path, target: float):
-    """Single-pass loudnorm can land a few LU off; measure and correct with a cheap audio-only pass."""
+def _measure(path: Path):
     from common import run, FFMPEG
     p = run([FFMPEG, "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", "ebur128=peak=true", "-f", "null", "-"],
             check=False)
     m = re.findall(r"I:\s+(-?[0-9.]+) LUFS", p.stderr)
-    if not m:
-        return
-    measured = float(m[-1])
     pk = re.findall(r"Peak:\s+(-?[0-9.]+) dBFS", p.stderr)
-    peak = float(pk[-1]) if pk else -99.0
-    gain = target - measured
-    if measured < -60 or (abs(gain) < 1.0 and peak <= -1.0):  # AAC adds up to ~2 dB on hard transients
+    return (float(m[-1]) if m else None), (float(pk[-1]) if pk else -99.0)
+
+
+def fix_loudness(path: Path, target: float, max_peak: float = -1.0):
+    """Single-pass loudnorm can land a few LU off, and AAC adds 1-3 dB of overshoot on hard
+    transients (hits, booms). Correct the level and limit, then re-measure the encoded file and
+    tighten the limiter until the true peak is at or below `max_peak` (audio-only passes)."""
+    measured, peak = _measure(path)
+    if measured is None or measured < -60:
         return
-    if abs(gain) < 1.0:
-        gain = 0.0  # level is fine, only limit the peaks
-    tmp = path.with_name(path.stem + ".loud" + path.suffix)
-    ffmpeg(["-i", str(path), "-map", "0", "-c:v", "copy", "-af",
-            f"volume={gain:.2f}dB,alimiter=limit=0.7:level=false:attack=3:release=80", "-c:a", "aac", "-b:a", "192k",
-            "-movflags", "+faststart", str(tmp)])
-    tmp.replace(path)
-    log(f"loudness {measured:.1f} LUFS / peak {peak:.1f} dBFS -> ~{target:.0f} LUFS, peaks limited")
+    gain = target - measured if abs(target - measured) >= 1.0 else 0.0
+    if gain == 0.0 and peak <= max_peak:
+        return
+    src = path.with_name(path.stem + ".src" + path.suffix)
+    path.replace(src)
+    limit = 0.7
+    try:
+        for attempt in range(4):
+            tmp = path.with_name(path.stem + ".loud" + path.suffix)
+            ffmpeg(["-i", str(src), "-map", "0", "-c:v", "copy", "-af",
+                    f"volume={gain:.2f}dB,alimiter=limit={limit:.3f}:level=false:attack=3:release=80",
+                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(tmp)])
+            m2, p2 = _measure(tmp)
+            tmp.replace(path)
+            if p2 <= max_peak:
+                break
+            limit *= 10 ** ((max_peak - p2 - 0.3) / 20)  # pull the limiter down by the overshoot
+        log(f"loudness {measured:.1f} LUFS / peak {peak:.1f} dBFS -> {m2:.1f} LUFS / {p2:.1f} dBFS"
+            f" ({attempt + 1} pass{'es' if attempt else ''})")
+    finally:
+        if path.exists():
+            src.unlink(missing_ok=True)
+        else:
+            src.replace(path)
 
 
 FORMATS = {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080), "4:5": (1080, 1350),

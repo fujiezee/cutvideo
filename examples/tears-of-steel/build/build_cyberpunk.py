@@ -12,8 +12,7 @@ ECHO = [{"type": "echo"}]
 clips = [
     v(45.8, 47.8, **A, effects=[{"type": "fade_in", "duration": 0.3}] + ECHO),   # hologram robots
     v(48.0, 49.6, **A, effects=G),                                                 # control panel
-    v(50.0, 51.0, **A),
-    v(51.3, 53.3, **{**A, "volume": 1.0}, effects=RGB, duck_music=True),                 # "Robot's memory synced"
+    v(49.85, 53.3, **{**A, "volume": 1.2}, effects=RGB, duck_music=True),                # "Robot's memory synced"
     v(57.0, 59.0, **A, effects=[{"type": "zoom_in", "amount": 0.12}]),           # the brain
     v(295.2, 296.4, **A, effects=G, transition={"type": "pixelize", "duration": 0.3}),  # PLAYBACK
     v(296.6, 297.4, **A),
@@ -46,13 +45,13 @@ edl = {
     "beat_sync": {"music": 0, "every": 2, "shift": "auto", "clips": [0, last - 1]},
     "sounds": [{"sfx": "glitch", "clip": i, "start": 0.0, "volume": 0.35}
                for i, c in enumerate(clips) if any(e.get("type") == "glitch" for e in c.get("effects", []))]
-              + [{"sfx": "boom", "clip": 14, "start": 0.0, "volume": 0.55}],
+              + [{"sfx": "boom", "clip": 13, "start": 0.0, "volume": 0.55}],
     "subtitles": {"enabled": True, "from": "manual", "items": [
-        {"text": "ROBOT'S MEMORY SYNCED", "clip": 3, "src_start": 51.3, "src_end": 52.6, "style": "caption",
+        {"text": "ROBOT'S MEMORY SYNCED", "clip": 2, "src_start": 49.89, "src_end": 51.75, "style": "caption",
          "font": "mono", "color": "#B8FFF6", "size": 0.04, "pos": [0.5, 0.88]}]},
     "texts": [
         {"text": "MEMORY OVERWRITE", "clip": 0, "start": 0.3, "end": 2.0, "style": "neon", "size": 0.09},
-        {"text": "SYSTEM ERROR", "clip": 14, "start": 0.05, "end": 1.6, **NEON_RED, "size": 0.1},
+        {"text": "SYSTEM ERROR", "clip": 13, "start": 0.05, "end": 1.6, **NEON_RED, "size": 0.1},
         {"text": "REBOOT", "clip": last, "start": 0.6, "end": 2.6, "style": "neon", "size": 0.08,
          "pos": [0.5, 0.82], "tracking": 0.25},
         credit,

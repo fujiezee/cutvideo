@@ -98,6 +98,14 @@ def intelligibility(path: str, subs: list[dict], model_name: str, lang: str | No
     # no VAD: speech under music must still be attempted
     segs, _ = model.transcribe(audio, language=lang, vad_filter=False, word_timestamps=True)
     words = [(w.start, w.end, w.word) for s in segs for w in (s.words or [])]
+
+    def recheck(a, b):
+        """Transcribe only the caption's own window: long-form decoding can drop lines near
+        30 s window edges, which would be a false alarm."""
+        i0, i1 = max(0, int((a - 1.0) * 16000)), int((b + 1.0) * 16000)
+        sg, _ = model.transcribe(audio[i0:i1], language=lang, vad_filter=False)
+        return tokens(" ".join(x.text for x in sg))
+
     res = []
     for c in subs:
         a, b = float(c["start"]) - 0.4, float(c["end"]) + 0.4
@@ -106,6 +114,11 @@ def intelligibility(path: str, subs: list[dict], model_name: str, lang: str | No
         # bilingual captions: score against the line in the spoken language (best match)
         scores = [(recall(tokens(ln), heard), ln) for ln in lines] or [(1.0, "")]
         r, ln = max(scores)
+        if r < 0.6:  # second opinion on the line alone before reporting it
+            heard2 = recheck(float(c["start"]), float(c["end"]))
+            r2, ln2 = max((recall(tokens(x), heard2), x) for x in lines) if lines else (1.0, "")
+            if r2 > r:
+                r, ln, heard = r2, ln2, heard2
         res.append({"start": round(c["start"], 2), "end": round(c["end"], 2), "text": ln, "recall": round(r, 2),
                     "heard": " ".join(heard)})
     return res

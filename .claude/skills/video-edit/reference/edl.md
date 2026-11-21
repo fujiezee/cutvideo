@@ -25,6 +25,9 @@ JSON. Paths are relative to the EDL file unless absolute.
  "fit": "crop", "bg": "black", "crf": 18, "preset": "medium", "loudness": -14, "font": "/path/font.ttf"}
 ```
 
+`maxrate`: video bitrate cap (default about 10M for 1080p30, scaled by resolution and frame
+rate) so grainy looks stay a sensible file size; `crf` still sets quality below the cap.
+
 `fit`: `crop` (fill frame, crop edges), `blur` (whole picture over a blurred copy), `pad`
 (letterbox with `bg`).
 
