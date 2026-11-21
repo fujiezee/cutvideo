@@ -168,6 +168,15 @@ def effect_filters(effects: list[dict], W: int, H: int, dur: float, fps: float) 
 
 # ------------------------------------------------------------------ clip rendering
 
+
+def intro_of(clip: dict, fps: float):
+    """(spec, at, hold) of the clip's freeze-frame intro, hold rounded to whole frames; or None."""
+    spec = next((e for e in clip.get("effects", []) if e.get("type") == "intro"), None)
+    if not spec:
+        return None
+    return spec, float(spec.get("at", 0.5)), max(1, round(float(spec.get("hold", 1.8)) * fps)) / fps
+
+
 AUDIO_KEYS = {"volume", "mute", "audio_lead", "audio_tail", "duck_music", "transition"}
 
 
@@ -182,8 +191,12 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     focus = clip.get("focus", [0.5, 0.5])
 
     vclip = {k: v for k, v in clip.items() if k not in AUDIO_KEYS}  # audio tweaks must not re-encode video
+    iv = 0
+    if any(e.get("type") == "intro" for e in effects):
+        import intro as _intro
+        iv = _intro.VERSION
     key = hashlib.sha1(json.dumps({"c": vclip, "W": W, "H": H, "fps": fps, "g": grade, "fit": fit,
-                                   "q": ctx["clip_q"], "v": 5}, sort_keys=True).encode()).hexdigest()[:12]
+                                   "q": ctx["clip_q"], "v": 6, "iv": iv}, sort_keys=True).encode()).hexdigest()[:12]
     out = ctx["clip_dir"] / f"c{i:03d}_{key}.mp4"
 
     inputs, src_dur, has_audio = [], 0.0, False
@@ -259,9 +272,15 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     vf.append(f"tpad=stop_mode=clone:stop_duration={3 / fps:.4f}")
     vf.append("setsar=1,format=yuv420p")
     nframes = max(1, round(total * fps))
+    enc = ["-c:v", "libx264", "-preset", ctx["clip_preset"], "-crf", str(ctx["clip_q"]), "-g", str(int(fps))]
+    tmp = out.with_name(out.stem + ".part.mp4")
     ffmpeg([*inputs, "-filter_complex", f"[0:v]{','.join(vf)}[v]", "-map", "[v]", "-an",
-            "-frames:v", str(nframes), "-c:v", "libx264", "-preset", ctx["clip_preset"], "-crf", str(ctx["clip_q"]),
-            "-g", str(int(fps)), str(out)])
+            "-frames:v", str(nframes), *enc, str(tmp)])
+    intro = intro_of(clip, fps)
+    if intro:
+        from intro import apply_intro
+        apply_intro(tmp, intro[0], fps, ctx["clip_dir"] / f"intro{i:03d}", enc, ctx.get("font"))
+    tmp.replace(out)
     return {"path": str(out), "duration": probe(out)["duration"], "cached": False, "audio": audio}
 
 
@@ -280,9 +299,12 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
     akey = hashlib.sha1(json.dumps({"p": clip["path"], "a": a, "b": b, "s": speed, "v": clip.get("volume", 1.0),
                                     "l": lead_src, "t": tail_src, "r": reverse, "fz": fz,
                                     "fx": [e for e in clip.get("effects", []) if e.get("type") in ("fade_in", "fade_out")],
-                                    "ver": 1}, sort_keys=True).encode()).hexdigest()[:12]
+                                    "intro": intro_of(clip, ctx["fps"]), "ver": 2},
+                                   sort_keys=True).encode()).hexdigest()[:12]
     aout = ctx["clip_dir"] / f"a{i:03d}_{akey}.wav"
-    length = lead_out + dur + tail_out + fz
+    intro = intro_of(clip, ctx["fps"])
+    gap = intro[2] if intro else 0.0
+    length = lead_out + dur + tail_out + fz + gap
     if not aout.exists():
         af = []
         if reverse:
@@ -302,8 +324,16 @@ def render_clip_audio(i, clip, ctx, info, a, b, speed, dur, names, freeze) -> di
         if fz:
             af.append(f"apad=pad_dur={fz}")
         af.append("aresample=48000,aformat=channel_layouts=stereo")
+        if intro:  # audio pauses while the picture is frozen
+            T = lead_out + intro[1]
+            graph = (f"[0:a]{','.join(af)},asplit[x][y];[x]atrim=end={T:.4f},afade=t=out:st={max(T - 0.04, 0):.4f}:d=0.04[p1];"
+                     f"[y]atrim=start={T:.4f},asetpts=PTS-STARTPTS,afade=t=in:d=0.06[p3];"
+                     f"anullsrc=r=48000:cl=stereo,atrim=duration={gap:.4f}[p2];[p1][p2][p3]concat=n=3:v=0:a=1[ao]")
+            args = ["-filter_complex", graph, "-map", "[ao]"]
+        else:
+            args = ["-af", ",".join(af)]
         ffmpeg(["-ss", f"{a - lead_src:.3f}", "-t", f"{(b - a) + lead_src + tail_src:.3f}", "-i", clip["path"],
-                "-vn", "-af", ",".join(af), "-t", f"{length:.3f}", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+                "-vn", *args, "-t", f"{length:.3f}", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
                 str(aout)])
     return {"path": str(aout), "lead": round(lead_out, 3), "duration": round(length, 3)}
 
@@ -393,7 +423,8 @@ def _clen_raw(c):
     a = float(c.get("in", 0))
     b = float(c["out"]) if c.get("out") is not None else a + float(c.get("dur", 2))
     fz = sum(float(e.get("duration", 0.6)) for e in c.get("effects", []) if e.get("type") == "freeze")
-    return (b - a) / float(c.get("speed", 1.0)) + fz
+    it = intro_of(c, PLAN_FPS[0])
+    return (b - a) / float(c.get("speed", 1.0)) + fz + (it[2] if it else 0.0)
 
 
 def plan_starts(clips: list[dict]) -> list[float]:
@@ -450,6 +481,14 @@ def text_len(s: str) -> float:
     return sum(1 if is_cjk(ch) else 0.55 for ch in s)
 
 
+def src_to_out(seg: dict, t: float) -> float:
+    """Map a source-video time inside a clip to output time (speed and intro freeze aware)."""
+    rel = (t - seg["src_in"]) / seg["speed"]
+    if seg.get("intro_at") is not None and rel >= seg["intro_at"]:
+        rel += seg["intro_hold"]
+    return seg["out_start"] + rel
+
+
 def anchor_to_clip(item: dict, timeline: list[dict]) -> dict | None:
     """Resolve a text/caption whose timing is given relative to a clip.
 
@@ -468,8 +507,8 @@ def anchor_to_clip(item: dict, timeline: list[dict]) -> dict | None:
     va, vb = seg.get("vis_start", a), seg.get("vis_end", seg["out_end"])
     if "src_start" in item:
         sp, src_in = seg["speed"], seg["src_in"]
-        it["start"] = a + (float(item["src_start"]) - src_in) / sp
-        it["end"] = a + (float(item.get("src_end", seg["src_out"])) - src_in) / sp
+        it["start"] = src_to_out(seg, float(item["src_start"]))
+        it["end"] = src_to_out(seg, float(item.get("src_end", seg["src_out"])))
         it["start"], it["end"] = max(it["start"], va), min(it["end"], vb)  # not across transitions
     else:
         it["start"] = a + float(item.get("start", 0))
@@ -477,64 +516,148 @@ def anchor_to_clip(item: dict, timeline: list[dict]) -> dict | None:
     return it if it["end"] - it["start"] > 0.05 else None
 
 
+SUB_PASS = ("size", "color", "stroke_color", "stroke", "pos", "box", "font", "highlight", "highlight_color",
+            "line_colors", "line_spacing", "max_width", "anim", "karaoke", "karaoke_color", "karaoke_box",
+            "karaoke_dim", "weight", "tracking", "shadow")
+
+
+def _even_words(it: dict) -> list[dict]:
+    """Spread a caption's tokens evenly over its duration (karaoke without word timings)."""
+    from overlay import _tokens
+    toks = [t for t in _tokens(it["text"].split("\n")[0])]
+    if not toks:
+        return []
+    n_real = sum(1 for t in toks if t.strip()) or 1
+    step = (it["end"] - it["start"]) / n_real
+    out, pos, k = [], 0, 0
+    for t in toks:
+        if t.strip():
+            out.append({"s": pos, "e": pos + len(t), "t0": it["start"] + k * step, "t1": it["start"] + (k + 1) * step})
+            k += 1
+        pos += len(t)
+    return out
+
+
+def _merge_short(items: list[dict], limit: float, min_dur: float = 0.45) -> list[dict]:
+    """Merge captions shorter than `min_dur` into a touching neighbour (e.g. a word stranded
+    by a cut) when the merged text still fits in `limit` (text_len units)."""
+    def join(p, n):
+        sep = "" if (p["text"] and is_cjk(p["text"][-1])) else " "
+        off = len(p["text"]) + len(sep)
+        m = {**p, "text": p["text"] + sep + n["text"], "end": n["end"]}
+        if "words" in p or "words" in n:
+            m["words"] = list(p.get("words", [])) + [{**w, "s": w["s"] + off, "e": w["e"] + off}
+                                                      for w in n.get("words", [])]
+        return m
+
+    out = []
+    for it in items:
+        if out and "\n" not in it["text"] + out[-1]["text"] and out[-1].get("style") == it.get("style") \
+                and it["start"] - out[-1]["end"] < 0.12 \
+                and (it["end"] - it["start"] < min_dur or out[-1]["end"] - out[-1]["start"] < min_dur) \
+                and text_len(out[-1]["text"] + it["text"]) <= limit:
+            out[-1] = join(out[-1], it)
+        else:
+            out.append(it)
+    return out
+
+
 def build_subtitles(edl: dict, timeline: list[dict], analysis: dict | None) -> list[dict]:
+    """Captions on the output timeline. With `karaoke`, each caption carries per-word timings
+    (`words`: char ranges + times) so the overlay can highlight the word being spoken."""
     sub = edl.get("subtitles") or {}
     if not sub or sub.get("enabled") is False:
         return []
+    shared = {k: sub[k] for k in SUB_PASS if k in sub}
     items = []
     for it in sub.get("items", []):  # manual captions (output time, or anchored to a clip)
         it = anchor_to_clip(it, timeline)
         if it:
-            items.append({**it, "style": it.get("style", sub.get("style", "caption"))})
+            it = {**shared, **it, "style": it.get("style", sub.get("style", "caption"))}
+            if it.get("karaoke") and "words" not in it:
+                it["words"] = _even_words(it)
+            items.append(it)
     if not analysis or sub.get("from", "transcript") != "transcript":
         return items
     max_chars = float(sub.get("max_chars", 14))
     strip = sub.get("strip_punct", True)
     by_path = {v["path"]: v for v in analysis.get("videos", [])}
     replace = sub.get("replace", {})
+
+    def clean(wt: str) -> str:
+        for k, val in replace.items():
+            wt = wt.replace(k, val)
+        if strip:
+            core = wt.strip()
+            core = core.strip(PUNCT)
+            core = re.sub(r"[，。、；：,;:]+", " ", core)
+            wt = (" " if wt[:1] == " " else "") + core
+        return wt
+
     for seg in timeline:
         c = seg["clip"]
         v = by_path.get(c.get("path"))
         if not v or not v.get("transcript") or c.get("mute") or "reverse" in {e.get("type") for e in c.get("effects", [])}:
             continue
-        a, b, sp = seg["src_in"], seg["src_out"], seg["speed"]
-        words = [w for s in v["transcript"]["segments"] for w in (s.get("words") or
-                 [{"start": s["start"], "end": s["end"], "word": s["text"]}])]
+        a, b = seg["src_in"], seg["src_out"]
+        words = [w for s_ in v["transcript"]["segments"] for w in (s_.get("words") or
+                 [{"start": s_["start"], "end": s_["end"], "word": s_["text"]}])]
         words = [w for w in words if w["end"] > a + 0.05 and w["start"] < b - 0.05]
-        chunk, cs, ce = "", None, None
+        chunk: list[tuple[str, float, float]] = []
 
         def flush():
-            nonlocal chunk, cs, ce
-            txt = chunk.strip()
-            for k, val in replace.items():
-                txt = txt.replace(k, val)
-            if strip:
-                txt = txt.strip(PUNCT + " ")
-                txt = re.sub(r"[，。、；：,;:]+", " ", txt).strip()
+            nonlocal chunk
+            parts, wl, pos = [], [], 0
+            for wt, ws, we in chunk:
+                wt = clean(wt)
+                if not parts:
+                    wt = wt.lstrip()
+                if not wt.strip():
+                    continue
+                lead = len(wt) - len(wt.lstrip())
+                wl.append({"s": pos + lead, "e": pos + len(wt.rstrip()),
+                           "t0": round(src_to_out(seg, max(ws, a)), 3), "t1": round(src_to_out(seg, min(we, b)), 3)})
+                parts.append(wt)
+                pos += len(wt)
+            txt = "".join(parts).rstrip()
             if txt:
-                t0 = seg["out_start"] + (max(cs, a) - a) / sp
-                t1 = seg["out_start"] + (min(ce, b) - a) / sp
-                t1 = min(t1, seg["out_end"])
+                t0 = src_to_out(seg, max(chunk[0][1], a))
+                t1 = min(src_to_out(seg, min(chunk[-1][2], b)), seg["out_end"])
                 if t1 - t0 > 0.15:
-                    items.append({"text": txt, "start": round(t0, 3), "end": round(t1, 3),
-                                  "style": sub.get("style", "caption"), **{k: sub[k] for k in
-                                  ("size", "color", "stroke_color", "pos", "box", "font", "highlight") if k in sub}})
-            chunk, cs, ce = "", None, None
+                    item = {"text": txt, "start": round(t0, 3), "end": round(t1, 3),
+                            "style": sub.get("style", "caption"), **shared}
+                    if sub.get("karaoke"):
+                        item["words"] = wl
+                    items.append(item)
+            chunk = []
 
         for w in words:
             wt = w["word"]
-            if cs is not None and (w["start"] - ce > 0.6 or text_len(chunk + wt) > max_chars):
+            cur = "".join(x[0] for x in chunk)
+            if chunk and (w["start"] - chunk[-1][2] > 0.6 or text_len(cur + wt) > max_chars):
                 flush()
-            if cs is None:
-                cs = w["start"]
-            chunk += wt
-            ce = w["end"]
+            chunk.append((wt, w["start"], w["end"]))
             if wt.strip() and wt.strip()[-1] in "。！？.!?":
                 flush()
-        if cs is not None:
+        if chunk:
             flush()
-    # keep captions from overlapping each other
+    # captions pause while a freeze-frame intro is on screen
+    holds = [(t["out_start"] + t["intro_at"], t["out_start"] + t["intro_at"] + t["intro_hold"])
+             for t in timeline if t.get("intro_at") is not None]
+    for h0, h1 in holds:
+        split = []
+        for it in items:
+            if it["start"] < h1 and it["end"] > h0:
+                if it["start"] < h0 - 0.15:
+                    split.append({**it, "end": h0})
+                if it["end"] > h1 + 0.15:
+                    split.append({**it, "start": h1})
+            else:
+                split.append(it)
+        items = split
     items.sort(key=lambda x: x["start"])
+    items = _merge_short(items, float(sub.get("max_chars", 14)) * 1.35)
+    # keep captions from overlapping each other
     for p, n in zip(items, items[1:]):
         if p.get("style") == n.get("style") and p["end"] > n["start"]:
             p["end"] = n["start"]
@@ -580,7 +703,7 @@ def main():
             probes[p] = probe(p)
         return probes[p]
 
-    ctx = {"W": W, "H": H, "fps": fps, "grade": edl.get("grade", "none"), "fit": o.get("fit", "crop"),
+    ctx = {"W": W, "H": H, "fps": fps, "grade": edl.get("grade", "none"), "fit": o.get("fit", "crop"), "font": o.get("font"),
            "bg": o.get("bg", "black"), "clip_dir": clip_dir, "probe": cprobe,
            "clip_q": 26 if args.draft else 16, "clip_preset": "ultrafast" if args.draft else "veryfast"}
 
@@ -645,7 +768,11 @@ def main():
         sp = float(c.get("speed", 1.0))
         src_in = float(c.get("in", 0))
         timeline.append({"clip": c, "out_start": round(start, 3), "out_end": round(start + r["duration"], 3),
-                         "src_in": src_in, "src_out": src_in + (r["duration"] * sp), "speed": sp})
+                         "src_in": src_in, "speed": sp})
+        it = intro_of(c, fps)
+        hold = it[2] if it else 0.0
+        timeline[-1].update({"src_out": src_in + (r["duration"] - hold) * sp,
+                             "intro_at": it[1] if it else None, "intro_hold": hold})
     total = acc
     # visible span of each clip: transitions are split at their midpoint
     for i, t in enumerate(timeline):
@@ -747,7 +874,14 @@ def main():
         mix.append(f"[m{k}]")
         vin += 1
     from sfx import sfx_file
-    for k, snd in enumerate(edl.get("sounds", [])):
+    auto = []
+    for i, (c, t) in enumerate(zip(edl["clips"], timeline)):
+        it = intro_of(c, fps)
+        if it and it[0].get("sfx", "hit"):
+            auto.append({"sfx": it[0].get("sfx", "hit"), "at": t["out_start"] + it[1], "volume": it[0].get("sfx_volume", 0.7)})
+            auto.append({"sfx": "whoosh", "at": t["out_start"] + it[1] + 0.02, "volume": 0.35,
+                         "params": {"duration": 0.45}})
+    for k, snd in enumerate(list(edl.get("sounds", [])) + auto):
         if "clip" in snd:
             at = timeline[int(snd["clip"])]["out_start"] + float(snd.get("start", 0))
         else:

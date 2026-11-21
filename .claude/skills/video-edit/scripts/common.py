@@ -76,13 +76,41 @@ def probe(path: str | Path) -> dict:
     return info
 
 
-def find_font(preferred: str | None = None) -> str | None:
-    if preferred and Path(preferred).exists():
+BOLD_CANDIDATES = [  # "path#face-index"
+    "/System/Library/Fonts/PingFang.ttc#8",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc#2",
+    "/System/Library/Fonts/STHeiti Medium.ttc#1",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+    "C:/Windows/Fonts/msyhbd.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+
+def find_font(preferred: str | None = None, bold: bool = False) -> str | None:
+    """Return a font spec "path" or "path#index" (face inside a .ttc)."""
+    if preferred and Path(preferred.partition("#")[0]).exists():
         return preferred
-    for f in FONT_CANDIDATES:
-        if Path(f).exists():
+    for f in (BOLD_CANDIDATES if bold else []) + FONT_CANDIDATES:
+        path, _, idx = f.partition("#")
+        if Path(path).exists():
+            if idx:
+                try:
+                    from PIL import ImageFont
+                    ImageFont.truetype(path, 10, index=int(idx))
+                except Exception:
+                    continue
             return f
     return None
+
+
+def load_font(spec: str | None, size: int):
+    from PIL import ImageFont
+    if not spec:
+        return ImageFont.load_default()
+    path, _, idx = spec.partition("#")
+    return ImageFont.truetype(path, size, index=int(idx or 0))
 
 
 def fmt_ts(t: float) -> str:

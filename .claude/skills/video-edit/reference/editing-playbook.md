@@ -72,6 +72,22 @@ Pick the recipe that matches the footage and the ask, then adapt it. Rules of th
 3. Transitions: `slideleft`, `wipeleft`, `fade`; keep them consistent.
 4. Logo via `images` (top corner, opacity 0.8) or an end card (`color` clip + `title`).
 
+## Character intros (cast reel, short drama, variety, team / event video)
+
+1. One intro per person, the first time they appear. Choose a frame where they are still,
+   face visible, separated from the background (medium shot); extreme close-ups get the
+   no-cut-out look.
+2. 1-2 s into their shot, `hold` 1.5-2 s; one accent `color` per person, used consistently.
+3. `name` short (native name + romanisation is fine), `role` one line, `index` for a
+   numbered roster.
+4. Keep music running under the freeze; the intro adds its own hit and whoosh.
+
+## Short-video captions (Douyin / Reels / Shorts)
+
+Big bold captions with the word being spoken highlighted (`karaoke: "word"`,
+`karaoke_box`), 1-2 lines of 8-14 characters, placed around 70-75 % of the height. Fix the
+transcript first: wrong words are very visible when they light up.
+
 ## Multi-camera / multiple takes of the same moment
 
 Match moments by transcript text or by visual content, keep the best-framed angle for each

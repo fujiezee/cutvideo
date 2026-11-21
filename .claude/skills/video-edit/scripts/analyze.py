@@ -241,7 +241,8 @@ def contact_sheets(path: str, vid: str, scenes: list[dict], out_dir: Path, cols:
         return []
     tw = 384
     font_path = find_font()
-    font = ImageFont.truetype(font_path, 20) if font_path else ImageFont.load_default()
+    from common import load_font
+    font = load_font(font_path, 20)
     paths = []
     per = cols * rows
     for pi in range(0, len(tiles), per):

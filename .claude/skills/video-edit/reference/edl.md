@@ -92,6 +92,27 @@ Aliases: `crossfade`→fade, `black`→fadeblack, `white`/`flash`→fadewhite, `
 | `bw` | – | black and white |
 | `blur` | `amount` 12 | gaussian blur (background behind text) |
 | `vignette`, `grain` (`amount`), `sharpen`, `mirror`, `echo` | – | misc looks; `echo` = ghost trails |
+| `intro` | see below | freeze-frame character intro (name card) |
+
+### Character intro (`intro` effect)
+
+```json
+{"type": "intro", "at": 1.2, "hold": 1.8, "name": "BARLEY", "role": "Sniper", "index": "03",
+ "color": "#0A84FF", "bg": "bw", "box": [0.3, 0.1, 0.97, 1.0], "side": "auto",
+ "cutout": true, "sfx": "hit", "sfx_volume": 0.7}
+```
+
+At `at` seconds into the clip the picture freezes for `hold` seconds (the clip becomes that
+much longer; its audio pauses; a `hit` + whoosh play unless `"sfx": null`). The frozen frame:
+background `bg` = `bw` | `dark` | `tint` | `blur`; the person cut out in colour with a white
+outline and an accent glow; an accent panel (`color`) slides in with `name`, `role` and an
+optional `index`. `side`: where the text goes (`auto` = opposite the person).
+
+- Cut-out: OpenCV GrabCut seeded by the face (bundled Haar cascades) and the `box`
+  (fractions of the output frame, after crop/pad). Without `box` the person is found from the
+  face. If `rembg` is installed it is used instead (better edges).
+- If no person can be isolated (no face and no box, or the cut-out covers <8% or >85% of the
+  frame) the intro uses the no-cut-out look: colour frame, darkened edges, same panel.
 
 ## Grades
 
@@ -131,6 +152,8 @@ that is visible (up to the midpoint of its transitions).
 - `anim`: `none`, `fade`, `pop`, `slide_up`, `typewriter`, `zoom` (`anim_in`, `anim_out`,
   `type_time`, `zoom` = push-in amount, default 0.08).
 - `tracking`: letter spacing as a fraction of the font size (0.1-0.3 for titles).
+- `weight`: `bold` uses a bold CJK-capable face (default for `caption`, `title`,
+  `highlight`, `tag`, `card`); `font` may name a face inside a collection as `path.ttc#index`.
 - `line_colors`: one colour per line, e.g. bilingual subtitles `["#FFFFFF", "#C8C8C8"]`.
 - `box`: background colour (`#RRGGBBAA` allowed). `\n` forces a line break.
 
@@ -141,6 +164,24 @@ that is visible (up to the midpoint of its transitions).
  "strip_punct": true, "replace": {"misheard": "corrected"}, "highlight": ["key"],
  "items": [{"text": "manual caption", "start": 1.0, "end": 2.5}]}
 ```
+
+Word-by-word highlight (karaoke):
+
+```json
+"subtitles": {"enabled": true, "karaoke": "word", "karaoke_box": "#FFE600",
+              "karaoke_color": "#FFE600", "karaoke_dim": "#FFFFFF99"}
+```
+
+- `karaoke`: `word` = only the word being spoken is highlighted; `fill` = spoken words stay
+  highlighted.
+- `karaoke_box`: draw a rounded box in this colour behind the current word (its text turns
+  dark); without it the word is drawn in `karaoke_color`. `karaoke_dim`: colour for words not
+  yet spoken.
+- Word timings come from the transcript; manual `items` without timings spread their words
+  evenly. Captions shorter than 0.45 s are merged into a touching neighbour, and captions
+  pause during character intros.
+- Other keys copied onto every caption: `size`, `color`, `stroke`, `stroke_color`, `pos`,
+  `box`, `font`, `weight`, `highlight`, `line_colors`, `max_width`, `anim`, `shadow`.
 
 Use `"from": "manual"` to skip the transcript and caption only `items` (handy when the
 ASR is unreliable, e.g. dialogue under loud music, or for translated captions).

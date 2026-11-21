@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import find_font, fmt_ts, probe  # noqa: E402
+from common import find_font, fmt_ts, load_font, probe  # noqa: E402
 
 
 def review_sheet(video: str, marks: list[float] | None, out_dir, every: float | None = None,
@@ -45,7 +45,7 @@ def review_sheet(video: str, marks: list[float] | None, out_dir, every: float | 
     tw = 360 if w0 >= h0 else 240
     th = int(h0 * tw / w0)
     fp = find_font()
-    font = ImageFont.truetype(fp, 18) if fp else ImageFont.load_default()
+    font = load_font(fp, 18)
     paths, per = [], cols * rows if w0 >= h0 else (cols + 2) * rows
     c = cols if w0 >= h0 else cols + 2
     for pi in range(0, len(frames), per):

@@ -1,6 +1,6 @@
 ---
 name: video-edit
-description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "edit this video", "make a montage", "cut this down".
+description: Edit raw footage into a finished video by watching its content. Use whenever the user hands over one or more video files (optionally music, a logo, or a brief) and wants them cut, trimmed, mixed into a montage/highlight reel, turned into a short (9:16), given subtitles, transitions, effects, colour grading, titles or background music. Covers talking-head jump cuts, vlogs, highlight montages, beat-synced edits, travel/product/event recaps. Also covers trailers, freeze-frame character intros and word-by-word (karaoke) captions. Triggers on "剪辑", "混剪", "剪一下", "做个短视频", "加字幕", "卡点", "预告片", "人物介绍", "逐字字幕", "edit this video", "make a montage", "make a trailer", "cut this down".
 ---
 
 # Video edit
@@ -12,7 +12,8 @@ inferred (see "Defaults").
 
 Scripts live in `.claude/skills/video-edit/scripts/` (call them with `python3`). Requirements:
 `ffmpeg`, Python 3 with `numpy`, `opencv-python`, `Pillow`; `faster-whisper` for transcripts
-(`pip3 install --user faster-whisper`; the model downloads on first use).
+(`pip3 install --user faster-whisper`; the model downloads on first use). Optional: `rembg`
+for cleaner cut-outs in character intros.
 
 ## Workflow
 
@@ -50,12 +51,38 @@ python3 $S/preview.py IN.mp4 --at 12.5 13.0 13.5 --every 999 --out $J/work/look
 colorfulness / loudness_db / score`, `audio.silences`, `audio.speech_spans`, transcript
 segments with word timings, and for music `bpm`, `beats`, `strong_beats`, `drops`.
 
-### 3. Decide the edit
+Fix ASR mistakes before captioning: misheard words go in `subtitles.replace`; missing or
+mistimed words are corrected in `analysis.json` itself (keep a copy of the original). Check
+names, numbers and any word the captions will highlight.
 
-Pick an approach from `reference/editing-playbook.md` (talking head, vlog, montage,
-beat-synced short, recap, ...). Decide: format, target length, story order, which moments
-stay, pacing, transitions, effects, grade, text and music. Keep it purposeful: effects should
-serve the content, not decorate every cut.
+### 3. Design the edit: write `$J/plan.md` before any EDL
+
+Never go from footage straight to an EDL. Pick an approach from
+`reference/editing-playbook.md`, then write the plan with this structure:
+
+```markdown
+# Edit plan: <job>
+Goal / audience / platform: ...            Format: 9:16 1080x1920, ~30 s, fit crop
+Logline: <the story of this video in one sentence>
+## Structure
+| # | Section | Time | Picture (v/shot @ source time) | Sound (dialogue / music / SFX) | Text |
+|---|---|---|---|---|---|
+| 1 | Hook | 0-3 s | v1 s12 @ 41.2 best reaction | "line..." + boom | title card |
+## Music
+Track, offset, BPM, where the drop / hits land (pins), what is beat-synced
+## Look
+Grade, per-shot corrections, transitions and effects budget (which cuts get accents)
+## Text
+Caption style (plain / karaoke / bilingual), titles, cards, character intros
+## Risks / open questions
+Weak footage, missing coverage, licence/attribution, things the user should decide
+```
+
+Then show the user a short summary of the plan (logline, structure in a few lines, length,
+format, music) and go ahead, unless something in it changes the result and cannot be
+inferred (purpose, platform/aspect, a length limit, which person is the subject): ask
+those, at most 3 questions, before rendering. If the user asked to approve the plan first,
+wait. The EDL implements the plan; when you deviate while editing, update `plan.md`.
 
 Optional shortcut for a first pass, then refine by hand:
 
@@ -114,7 +141,8 @@ handoff that the mix was checked by measurement, and ask the user to listen.
 ### 6. Deliver
 
 Give the user: the output path, length/format, a 3-6 line description of the cut (story,
-key moments used, effects, music), and the `.srt` path if subtitles were made. Offer
+key moments used, effects, music), the `.srt` path if subtitles were made, and anything in
+`plan.md` that changed or could not be done. Offer
 alternatives worth trying (other length, other format, different music) in one line.
 Keep `edl.json`: later change requests are edits to it plus a re-render.
 
@@ -145,6 +173,13 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   trailer recipe in the playbook.
 - Synthesised SFX (`sounds` with `sfx`) need no sample files; keep them under the music
   except on drops and the title.
+- Character intros (`{"type": "intro"}` effect) freeze the clip at `at`; the clip gets longer
+  by `hold`, captions pause during the freeze. `box` is in output-frame coordinates (after
+  crop/pad); omit it to find the person from the face. Extreme close-ups get the
+  no-cut-out look automatically. Pick a frame where the person is still and clearly
+  separated from the background (medium shot, face visible).
+- Karaoke captions (`subtitles.karaoke`) need accurate word timings: fix the transcript
+  first; captions with no word timings spread their words evenly.
 - Prefer anchoring texts and manual captions to clips (`"clip": i` with `start`/`end`, or
   `src_start`/`src_end` in source seconds) over absolute output times: they stay correct
   when clips are trimmed, reordered or transitions change.

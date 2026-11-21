@@ -5,14 +5,16 @@ video. You hand Claude the video files; it watches them (contact sheets + transc
 the cut, renders it with ffmpeg, reviews its own render, and iterates.
 
 It handles talking-head jump cuts, vlogs, highlight montages, beat-synced shorts (9:16),
-and product or event recaps, with subtitles, transitions, effects, colour grading, titles and
-background music.
+trailers, cast intros, and product or event recaps, with subtitles, transitions, effects,
+colour grading, titles and background music.
 
 ## Requirements
 
 - `ffmpeg` / `ffprobe`
 - Python 3.10+ with `numpy`, `opencv-python`, `Pillow`
 - `faster-whisper` for transcripts and subtitles (the model downloads on first use)
+- Optional: `rembg` for cleaner person cut-outs in character intros (OpenCV GrabCut is used
+  otherwise)
 
 ```bash
 pip3 install --user numpy opencv-python Pillow faster-whisper
@@ -68,8 +70,12 @@ python3 $S/render.py edits/demo/edl.json           # final
 - **Text:** title, caption, highlight, lower third, label, tag, quote; fade, pop, slide and
   typewriter animations; per-word colour highlights; CJK fonts
 - **Subtitles:** built from the transcript and kept in sync across cuts and speed changes;
-  exported as `.srt`
-- **Audio:** background music with ducking under speech, fades, loudness normalisation
+  word-by-word (karaoke) highlighting; bilingual lines; exported as `.srt`
+- **Character intros:** freeze frame, person cut out in colour, name and role panel slide in
+- **Audio:** music beds with ducking under dialogue, J/L cuts, synthesised trailer SFX
+  (boom, hit, whoosh, riser, ...), beat sync, cuts pinned to music hits, loudness and
+  true-peak control
+- **Planning:** a written edit plan (structure, music map, look, text) before any render
 - **Framing:** crop with a focus point, blurred background fill, or letterbox for any aspect
   ratio
 
