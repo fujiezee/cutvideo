@@ -10,3 +10,8 @@
 - [x] T8 L3: talking draft on a synthetic talking clip, fillers gone in the output transcript
 - [x] T9 Docs: SKILL.md, README, E2E catalog (English)
 - [ ] T10 Full suite (verify.json), review, delivery stamp
+
+## Review round 1
+
+- [x] R1 Talking cut uses every transcribed video when the footage is mostly talking
+- [x] R2 title3d opener pieces at least 2.8 s (wide shots and fallback)

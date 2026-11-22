@@ -558,18 +558,19 @@ def r_title3d(f, P, o):
     """3D title opener: calm wide shot with a slow push-in, the title swings in on a hit,
     then four quick story shots and the end card."""
     notes, bg = [], None
+    long_enough = [s for s in f["all"] if s["end"] - s["start"] >= 3.1]  # room for a 2.8 s reveal
     # calmest long wide shot without people: long enough for the reveal, least motion
-    for s in sorted(f["establishing"], key=lambda s: (s["end"] - s["start"] >= 4.4, -s.get("motion", 1)),
-                    reverse=True):
+    for s in sorted([s for s in f["establishing"] if s["end"] - s["start"] >= 3.1],
+                    key=lambda s: (s["end"] - s["start"] >= 4.9, -s.get("motion", 1)), reverse=True):
         p = P.piece(s, 4.6)
         if p:
             bg = (s, p)
             break
-    if not bg:  # no calm wide shot: the best shot, blurred, carries the title
-        bg = next(iter(P.take(f["all"], 1, 4.6, key="score", min_gap=0)), None)
+    if not bg:  # no calm wide shot: the best long shot, blurred, carries the title
+        bg = next(iter(P.take(long_enough, 1, 4.6, key="score", min_gap=0)), None)
         notes.append("no calm wide shot: the title sits on a blurred shot")
     if not bg:
-        return None, ["no usable shots"]
+        return None, ["no shot of 3 s or more to carry the title"]
     s0, p0 = bg
     fx0 = [{"type": "zoom_in", "amount": 0.08}, {"type": "vignette"}]
     if notes:
@@ -694,37 +695,40 @@ def r_talking(f, P, o):
     vids = [v for v in an.get("videos", []) if (v.get("transcript") or {}).get("segments")]
     if not vids:
         return None, ["needs a transcript of the speech (analyze.py transcribes it)"]
-    v = max(vids, key=lambda v: sum(len(s.get("words", [])) for s in v["transcript"]["segments"]))
-    words = [w for s in v["transcript"]["segments"] for w in s.get("words", [])
-             if not any(a <= w["start"] < b for vid, a, b in o.get("exclude", []) if vid in (None, v["id"]))]
-    if len(words) < 6:
-        return None, ["too little speech for a talking-head cut"]
-    notes, lo, hi = [], 0.0, v["duration"]
-    if f["speech_ratio"] < 0.4:  # not a talking-head recording: the densest dialogue minute
-        lo = _densest_window(words, 60.0)
-        hi = lo + 60.0
+    def kept_words(v):
+        return [w for s in v["transcript"]["segments"] for w in s.get("words", [])
+                if not any(a <= w["start"] < b for vid, a, b in o.get("exclude", []) if vid in (None, v["id"]))]
+
+    notes = []
+    if f["speech_ratio"] >= 0.4:  # a talk, maybe split over several files: all of it, in order
+        parts = [(v, kept_words(v)) for v in vids]
+    else:  # not a talking-head recording: the densest dialogue minute of the talkiest video
+        v = max(vids, key=lambda v: len(kept_words(v)))
+        ws = kept_words(v)
+        lo = _densest_window(ws, 60.0)
+        parts = [(v, [w for w in ws if lo <= w["start"] < lo + 60.0])]
         notes.append(f"footage is not mostly one person talking: cut from the densest dialogue minute "
-                     f"{fmt_ts(lo)}-{fmt_ts(hi)}")
-    words = [w for w in words if lo <= w["start"] < hi]
-    fillers = sum(1 for w in words if is_filler(w["word"]))
-    spans = speech_spans_without_fillers(words, pad=0.08, gap=0.35)
-    merged = []
-    for a, b in spans:
-        if merged and a - merged[-1][1] < 0.25:
-            merged[-1][1] = b
-        else:
-            merged.append([a, b])
-    merged = [m for m in merged if m[1] - m[0] >= 0.45]
-    budget, clips = 90.0, []
-    for k, (a, b) in enumerate(merged):
-        if budget <= 0:
-            break
-        b = min(b, a + budget)
-        c = {"src": v["id"], "in": round(a, 3), "out": round(b, 3), "focus": "track"}
-        if k % 3 == 1:
-            c["effects"] = [{"type": "punch", "scale": 1.1}]
-        clips.append(c)
-        budget -= b - a
+                     f"{fmt_ts(lo)}-{fmt_ts(lo + 60.0)}")
+    if sum(len(ws) for _, ws in parts) < 6:
+        return None, ["too little speech for a talking-head cut"]
+    budget, clips, fillers = 90.0, [], 0
+    for v, ws in parts:
+        fillers += sum(1 for w in ws if is_filler(w["word"]))
+        merged = []
+        for a, b in speech_spans_without_fillers(ws, pad=0.08, gap=0.35):
+            if merged and a - merged[-1][1] < 0.25:
+                merged[-1][1] = b
+            else:
+                merged.append([a, b])
+        for a, b in (m for m in merged if m[1] - m[0] >= 0.45):
+            if budget <= 0:
+                break
+            b = min(b, a + budget)
+            c = {"src": v["id"], "in": round(a, 3), "out": round(b, 3), "focus": "track"}
+            if len(clips) % 3 == 1:
+                c["effects"] = [{"type": "punch", "scale": 1.1}]
+            clips.append(c)
+            budget -= b - a
     if not clips:
         return None, ["no speech spans long enough to keep"]
     card, credit = end_card(o["credit"], 2.0)

@@ -484,3 +484,24 @@ def test_every_menu_style_has_a_recipe():
     feats = styles.features({"videos": []}, Path("/nonexistent"))
     menu = {s["key"] for s in styles.catalogue(feats)}
     assert menu <= set(autocut.RECIPES)
+
+
+def test_talking_recipe_keeps_every_file_of_a_talk():
+    w = lambda a, b, t: {"start": a, "end": b, "word": t}  # noqa: E731
+    seg = lambda off: {"words": [w(off + 0.2, off + 0.6, " one"), w(off + 0.65, off + 1.1, " two"),  # noqa: E731
+                                 w(off + 1.15, off + 1.6, " three.")]}
+    an = {"videos": [{"id": f"v{k}", "duration": 3.0, "transcript": {"segments": [seg(0.0)]}} for k in (1, 2, 3)]}
+    edl, _ = autocut.r_talking(_feat(), autocut.Picker(), _opts(analysis=an))
+    assert [c["src"] for c in edl["clips"] if c.get("src")] == ["v1", "v2", "v3"]
+
+
+def test_title3d_skips_openers_too_short_for_the_title():
+    f = _feat()
+    f["establishing"] = [dict(s, end=s["start"] + 0.9, faces=0) for s in f["establishing"]]
+    f["all"] = f["establishing"] + [_shot(400.0, 6.0)]
+    edl, notes = autocut.r_title3d(f, autocut.Picker(), _opts())
+    c0, t = edl["clips"][0], edl["texts"][0]
+    assert c0["out"] - c0["in"] >= 2.8 and t["end"] - t["start"] >= 2.0
+    assert "blurred" in notes[0]
+    f["all"] = f["establishing"]
+    assert autocut.r_title3d(f, autocut.Picker(), _opts())[0] is None
