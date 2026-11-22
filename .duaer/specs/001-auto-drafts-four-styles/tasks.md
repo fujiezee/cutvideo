@@ -9,7 +9,7 @@
 - [x] T7 L3: Tears of Steel drafts for title3d, text_behind, fx3d with QA, frames reviewed
 - [x] T8 L3: talking draft on a synthetic talking clip, fillers gone in the output transcript
 - [x] T9 Docs: SKILL.md, README, E2E catalog (English)
-- [ ] T10 Full suite (verify.json), review, delivery stamp
+- [x] T10 Full suite (verify.json), review, delivery stamp
 
 ## Review round 1
 
