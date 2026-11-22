@@ -1,0 +1,4 @@
+{
+  "commands": ["python3 -m py_compile .claude/skills/video-edit/scripts/*.py", "python3 -m pytest .claude/skills/video-edit/tests -q -p no:cacheprovider"],
+  "timeoutSec": 900
+}
