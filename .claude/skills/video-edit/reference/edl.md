@@ -288,6 +288,15 @@ becomes the output font unless the EDL sets one.
 | `clean` | high-pass 80 Hz, noise reduction, de-esser, gentle compressor |
 | `broadcast` | as `clean` plus a 3 kHz presence lift and firmer compression |
 
+## Generated music
+
+`music.py --mood tense|epic|calm|upbeat|retro --duration 45 [--bpm 110]` writes an
+instrumental bed and `<file>.beats.json` with its exact beat grid; `beat_sync` uses that grid
+(no phase search). With `music.json` (job folder or `~/.config/cutvideo/music.json`:
+`base_url`, `api_key_env`, `env_file`, `model`) an AI music model behind an OpenAI-compatible
+chat endpoint is asked first; when it fails the built-in generator is used. `autocut.py`
+generates a bed in each style's mood when the footage has no music and none is given.
+
 ## narration
 
 Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `espeak-ng`):
@@ -320,6 +329,9 @@ Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `esp
   subtitle settings (`size`, `pos`, style) apply. Narration captions default to the
   `explainer` style (`caption_style` changes it): short captions broken between phrases
   (never inside a name or a number), commas replaced by a wide space, keywords coloured.
+- Follow captions (`"follow": true`, default): each spoken line is aligned to its audio
+  (faster-whisper word timings matched to the script), captions start and end on their
+  words, and words not spoken yet are dimmed (`karaoke: "follow"`), keeping keyword colours.
 - Keywords: names from `people.json`, numbers with their unit, and anything written as
   `{word}` in the narration text (the braces are not spoken). `"highlight": false` turns
   this off. `"emphasis_style": "variety"` gives captions containing a `{marked}` word a

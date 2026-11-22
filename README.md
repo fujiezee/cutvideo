@@ -111,6 +111,10 @@ python3 $S/render.py edits/demo/edl.json           # final
   lets the editor name them; cast intros and recaps use it
 - **Voice-over:** narration spoken by the system voice, captioned, with music ducking under
   it; narrated "one-minute recap" drafts from a script
+- **Music:** a built-in generator for five moods with an exact beat grid when the footage
+  has no music, or an AI music model through a configurable gateway
+- **Follow captions:** narration captions aligned word by word to the voice, unspoken words
+  dimmed
 - **Speech clean-up:** noise reduction, de-essing and compression presets; filler words
   ("um", "uh") cut out of talking-head drafts
 - **Covers:** thumbnails for 16:9, 9:16, 3:4 and 1:1 from the main characters' best frames,

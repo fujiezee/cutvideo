@@ -529,6 +529,10 @@ def r_recap(f, P, o):
     return edl, [f"{n} narration lines; check each line's shots illustrate it, swap shots in the EDL if not"]
 
 
+MOOD = {"trailer": "epic", "beatmix": "upbeat", "cast": "epic", "karaoke": "calm", "vhs": "retro",
+        "silent": "calm", "cyberpunk": "retro", "recap": "tense"}
+
+
 RECIPES = {"trailer": r_trailer, "beatmix": r_beatmix, "cast": r_cast, "karaoke": r_karaoke, "vhs": r_vhs,
            "silent": r_silent, "cyberpunk": r_cyberpunk,
            "recap": r_recap}
@@ -554,6 +558,11 @@ def choose(spec: str, ranked: list[dict]) -> list[str]:
 
 
 def build(style, f, an_path: Path, auto_dir: Path, o) -> tuple[Path | None, list[str]]:
+    if o.get("generate_music") and not o.get("music"):  # no music anywhere: a bed in the style's mood
+        from music import make
+        path, _ = make(MOOD.get(style, "tense"), o.get("music_len", 90), auto_dir.parent / "audio",
+                       job_dir=auto_dir.parent)
+        o = {**o, "music": str(path)}
     edl, notes = RECIPES[style](f, Picker(), o)
     if edl is None:
         return None, notes
@@ -655,12 +664,15 @@ def main():
     ranked = catalogue(f)
     styles = choose(a.styles, ranked)
     music = None if a.no_music else (str(Path(a.music).resolve()) if a.music else find_music(an, job))
+    if music is None and not a.no_music:
+        log("music: no music in the footage and none given; generating a bed per style (music.py)")
     title = a.title or Path(an["videos"][0]["path"]).stem.replace("_", " ")
     auto_dir = job / "auto"
     script = ([ln.strip() for ln in Path(a.script).read_text(encoding="utf-8").splitlines() if ln.strip()]
               if a.script else [])
     o = {"music": music, "title": title, "credit": a.credit, "videos": an["videos"], "script": script,
-         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "brand": not a.no_brand, "caption_style": a.caption_style, "emphasis_style": a.emphasis_style,
+         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "brand": not a.no_brand, "caption_style": a.caption_style,
+         "generate_music": not a.no_music, "music_len": 90.0, "emphasis_style": a.emphasis_style,
          "palette": load_brand(job)["colors"], "tts_config": load_tts_config(job)}
     auto_dir.mkdir(exist_ok=True)
     (job / "out").mkdir(exist_ok=True)

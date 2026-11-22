@@ -130,3 +130,13 @@ def test_voice_preset_renders(job):
            "clips": [{"src": "v1", "in": 0.2, "out": 2.2}, {"src": "v1", "in": 3.2, "out": 5.2, "voice": "broadcast"}]}
     rep = render(edl, job, "edl_voice", "--draft")
     assert probe(rep["output"])["audio"]
+
+
+def test_autocut_generates_music_when_there_is_none(job):
+    run(sys.executable, SCRIPTS / "autocut.py", job / "work" / "analysis.json", "--styles", "beatmix",
+        "--draft", "--title", "T", cwd=job)
+    rep = json.loads((job / "auto" / "report.json").read_text())
+    assert rep["styles"][0].get("video"), rep["styles"][0].get("error")
+    edl = json.loads((job / "auto" / "edl_beatmix.json").read_text())
+    m = edl["music"][0]["path"]
+    assert "music_upbeat" in m and (job / "auto" / m).resolve().with_suffix(".beats.json").exists()

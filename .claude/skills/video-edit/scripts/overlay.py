@@ -156,6 +156,18 @@ def _karaoke_maps(st: dict, text: str, kara: int):
     hl = _rgba(st.get("karaoke_color", "#FFE600"))
     mode = st.get("karaoke", "word")
     cols, box = [dim] * n, [False] * n
+    spoken = [True] * n
+    if mode == "follow":
+        spoken = [False] * n
+        for j, w in enumerate(st.get("words", [])):
+            if j <= kara:
+                for c in range(w["s"], min(w["e"], n)):
+                    spoken[c] = True
+        # characters outside any word (spaces, punctuation) follow the preceding word
+        for c in range(1, n):
+            if not any(w["s"] <= c < w["e"] for w in st.get("words", [])):
+                spoken[c] = spoken[c - 1]
+        return cols, box, spoken
     for j, w in enumerate(st.get("words", [])):
         for c in range(w["s"], min(w["e"], n)):
             if j < kara:
@@ -163,7 +175,7 @@ def _karaoke_maps(st: dict, text: str, kara: int):
             elif j == kara:
                 cols[c] = _rgba("#111111") if st.get("karaoke_box") else hl
                 box[c] = bool(st.get("karaoke_box"))
-    return cols, box
+    return cols, box, spoken
 
 
 def _map_chars(text: str, lines: list[str]):
@@ -253,7 +265,12 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
             for m in re.finditer(re.escape(w), line):
                 colors[m.start():m.end()] = [hl] * (m.end() - m.start())
         boxes = None
-        if kmaps and li < len(cmap):
+        if kmaps and st.get("karaoke") == "follow" and li < len(cmap):
+            # follow the voice: words not spoken yet are dimmed, keeping their own colour
+            spoken = kmaps[2]
+            colors = [c if spoken[cmap[li][k]] else (c[0], c[1], c[2], int(c[3] * 0.42))
+                      for k, c in enumerate(colors[:len(cmap[li])])] + colors[len(cmap[li]):]
+        elif kmaps and li < len(cmap):
             colors = [kmaps[0][k] for k in cmap[li][:len(line)]]
             boxes = [kmaps[1][k] for k in cmap[li][:len(line)]]
             if any(boxes):  # rounded box behind the word being spoken
@@ -275,24 +292,48 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
             img = Image.alpha_composite(img, gl.filter(ImageFilter.GaussianBlur(size * 0.1)))
             d = ImageDraw.Draw(img)
         outer = int(size * float(st.get("outline2_width", 0.07))) if st.get("outline2") else 0
-        if st.get("shadow"):
+        if st.get("shadow") and not outer:  # with an outer outline the shadow is cast by it (below)
             sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
             _draw_line(ImageDraw.Draw(sh), x + size * 0.05, y + size * 0.07, line, font, [(0, 0, 0, 170)] * len(line),
                        stroke + outer, (0, 0, 0, 170), track)
             img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(size * 0.06)))
             d = ImageDraw.Draw(img)
-        if outer:  # second, outer outline (variety captions: dark inner + white outer)
-            oc = _rgba(st["outline2"])
-            _draw_line(d, x, y, line, font, [oc] * len(line), stroke + outer, oc, track)
         _draw_line(d, x, y, line, font, colors, stroke, stroke_fill, track, boxes)
         drawn.append((x, y, line, colors))
+    if st.get("outline2") and drawn:  # outer outline around the outside of the letters only:
+        # enclosed gaps (counters of 年, 的 ...) are filled with the inner outline colour
+        outer = max(1, int(size * float(st.get("outline2_width", 0.07))))
+        g = Image.new("L", img.size, 0)
+        gd_ = ImageDraw.Draw(g)
+        for x, y, line, _c in drawn:
+            _draw_line(gd_, x, y, line, font, [255] * len(line), stroke, 255, track)
+        g = g.point(lambda v: 255 if v > 40 else 0)
+        pad_ = Image.new("L", (g.width + 2, g.height + 2), 0)
+        pad_.paste(g, (1, 1))
+        ImageDraw.floodfill(pad_, (0, 0), 128)  # outside = 128; holes stay 0
+        filled = pad_.crop((1, 1, g.width + 1, g.height + 1)).point(lambda v: 0 if v == 128 else 255)
+        ring = filled.filter(ImageFilter.MaxFilter(2 * outer + 1))
+        base = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        if st.get("shadow"):
+            sh = Image.new("RGBA", img.size, (0, 0, 0, 170))
+            sh.putalpha(ring.point(lambda v: v * 170 // 255))
+            base.alpha_composite(sh.filter(ImageFilter.GaussianBlur(size * 0.06)),
+                                 (int(size * 0.05), int(size * 0.07)))
+        white = Image.new("RGBA", img.size, _rgba(st["outline2"]))
+        white.putalpha(ring)
+        base.alpha_composite(white)
+        dark = Image.new("RGBA", img.size, stroke_fill)
+        dark.putalpha(filled)
+        base.alpha_composite(dark)
+        img = Image.alpha_composite(base, img)
+        d = ImageDraw.Draw(img)
     if st.get("fill_gradient") and drawn:  # gradient on the letter faces only (outlines and
         # highlighted words keep their colours)
         hl_c = _rgba(st.get("highlight_color", "#FFE600"))
         mask = Image.new("L", img.size, 0)
         md = ImageDraw.Draw(mask)
         for x, y, line, colors in drawn:
-            _draw_line(md, x, y, line, font, [0 if c == hl_c else 255 for c in colors], 0, 0, track)
+            _draw_line(md, x, y, line, font, [0 if c[:3] == hl_c[:3] else c[3] for c in colors], 0, 0, track)
         c0, c1 = _rgba(st["fill_gradient"][0]), _rgba(st["fill_gradient"][1])
         grad = Image.new("RGBA", img.size)
         gd = ImageDraw.Draw(grad)
@@ -301,7 +342,13 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
         for yy in range(img.height):
             t_ = min(max((yy - y0) / max(y1 - y0, 1), 0), 1)
             gd.line([(0, yy), (img.width, yy)], fill=tuple(int(c0[i] + (c1[i] - c0[i]) * t_) for i in range(4)))
+        face = Image.new("L", img.size, 0)
+        fd = ImageDraw.Draw(face)
+        for x, y, line, colors in drawn:
+            _draw_line(fd, x, y, line, font, [0 if c[:3] == hl_c[:3] else 255 for c in colors], 0, 0, track)
+        under = img.copy()  # outline colour shows through where a dimmed face is translucent
         img.paste(grad, (0, 0), mask)
+        img = Image.composite(img, under, face)
     if st.get("gradient"):  # face filled with a vertical gradient (e.g. white -> gold)
         c0, c1 = _rgba(st["gradient"][0]), _rgba(st["gradient"][1])
         grad = Image.new("RGBA", img.size)

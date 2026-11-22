@@ -353,6 +353,69 @@ def caption_chunks(text: str, dur: float, max_cjk=16, max_latin=42, protect=()) 
     return out
 
 
+_ALIGN_MODEL = {}
+
+
+def _norm_char(c: str) -> str:
+    from qa import _NUM  # "4" and "四" compare equal
+    return _NUM.get(c, c).lower()
+
+
+def align(wav: Path, text: str, model_name: str = "small") -> list[tuple[float, float] | None]:
+    """Per-character (t0, t1) of `text` in the spoken `wav` (None for punctuation/space):
+    the line is recognised with word timings, matched to the
+    script character by character, and gaps are interpolated. [] when no recogniser."""
+    import difflib
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return []
+    from common import decode_audio_mono
+    if model_name not in _ALIGN_MODEL:
+        _ALIGN_MODEL[model_name] = WhisperModel(model_name, device="auto", compute_type="int8")
+    audio = decode_audio_mono(wav, 16000)
+    dur = len(audio) / 16000
+    lang = lang_of(text)
+    # no script as the prompt: Whisper then treats the opening words as already said and drops them
+    segs, _ = _ALIGN_MODEL[model_name].transcribe(audio, language=lang, word_timestamps=True, vad_filter=False,
+                                                  initial_prompt="以下是普通话的句子，使用简体中文。" if lang == "zh" else None)
+    rec = []  # (char, t0, t1)
+    for sg in segs:
+        for w in sg.words or []:
+            if w.end - w.start < 0.03:  # zero-length timings (often the first word): interpolate instead
+                continue
+            cs = [c for c in w.word if c.isalnum()]
+            for k, c in enumerate(cs):
+                a = w.start + (w.end - w.start) * k / len(cs)
+                rec.append((c, a, w.start + (w.end - w.start) * (k + 1) / len(cs)))
+    idx = [i for i, c in enumerate(text) if c.isalnum()]
+    times: list = [None] * len(text)
+    if not idx:
+        return times
+    sm = difflib.SequenceMatcher(None, [_norm_char(text[i]) for i in idx], [_norm_char(c) for c, _, _ in rec],
+                                 autojunk=False)
+    known = {}
+    for a, b, size in sm.get_matching_blocks():
+        for k in range(size):
+            known[a + k] = (rec[b + k][1], rec[b + k][2])
+    # interpolate characters the recogniser missed (numbers, names) between known ones
+    anchors = sorted(known)
+    for k in range(len(idx)):
+        if k in known:
+            continue
+        prev = max((a for a in anchors if a < k), default=None)
+        nxt = min((a for a in anchors if a > k), default=None)
+        t_prev = known[prev][1] if prev is not None else 0.0
+        t_next = known[nxt][0] if nxt is not None else dur
+        k0 = prev if prev is not None else -1
+        k1 = nxt if nxt is not None else len(idx)
+        span = (t_next - t_prev) / max(k1 - k0 - 1, 1)
+        known[k] = (t_prev + (k - k0 - 1) * span, t_prev + (k - k0) * span)
+    for k, i in enumerate(idx):
+        times[i] = (round(known[k][0], 3), round(known[k][1], 3))
+    return times
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("text", nargs="?")

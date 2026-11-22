@@ -255,12 +255,31 @@ def prepare_narration(edl: dict, work: Path):
         it["_path"], it["_dur"] = str(path), dur
         if nar.get("captions", True):
             t0 = float(it.get("start", it.get("at", 0)))
-            short = sub.get("style") in ("explainer", "boxed")  # punchier, shorter captions
-            for text, a, b in caption_chunks(it["text"], dur, max_cjk=12 if short else 16,
-                                             max_latin=32 if short else 42, protect=sub.get("highlight", [])):
+            short = sub.get("style") in ("explainer", "boxed", "variety", "bigword", "soft", "news")
+            ctimes = []
+            if nar.get("follow", True):  # word timings of the synthesised line
+                from tts import align
+                ctimes = align(Path(it["_path"]), it["text"])
+            cursor = 0
+            chunks = caption_chunks(it["text"], dur, max_cjk=12 if short else 16, max_latin=32 if short else 42,
+                                    protect=sub.get("highlight", []))
+            for ci, (text, a, b) in enumerate(chunks):
+                src0 = it["text"].find(text, cursor) if text else -1
+                src0 = src0 if src0 >= 0 else cursor
+                src1 = src0 + len(text)
+                cursor = src1
                 if short:  # explainer captions: no commas or full stops, a wide space instead
                     text = re.sub(r"\s*[，、；：]\s*", "\u3000", text).rstrip("。．.").strip("\u3000 ")
+                span = [ctimes[i] for i in range(src0, min(src1, len(ctimes))) if ctimes and ctimes[i]]
+                if span:  # caption sits exactly on its words; the next caption takes over at once
+                    a = span[0][0] if ci else 0.0
+                    nxt = [ctimes[i] for i in range(src1, len(ctimes)) if ctimes[i]]
+                    b = (nxt[0][0] if nxt else max(dur, span[-1][1]))
                 cap = {"text": text, "start": round(t0 + a, 3), "end": round(t0 + b, 3)}
+                if span:
+                    cap["karaoke"] = "follow"
+                    cap["words_rel"] = _follow_words(text, it["text"][src0:src1],
+                                                     ctimes[src0:src1], a)
                 # key lines (a {marked} word in this caption) switch to the emphasis style
                 emph = it.get("emphasis_style", nar.get("emphasis_style"))
                 if emph and any(w in text for w in it.get("_marked", [])):
@@ -268,6 +287,33 @@ def prepare_narration(edl: dict, work: Path):
                 if "clip" in it:
                     cap["clip"] = it["clip"]
                 sub.setdefault("items", []).append(cap)
+
+
+def _follow_words(shown: str, src: str, times: list, cap_start: float) -> list[dict]:
+    """Karaoke words for a displayed caption: char ranges in `shown`, times relative to the
+    caption start, from the per-character times of the source text `src`."""
+    from overlay import _tokens
+    # map each shown character to a source character (shown text differs only in punctuation)
+    m, j = [], 0
+    for ch in shown:
+        if not ch.isalnum():  # spaces / punctuation in the shown text carry no timing
+            m.append(None)
+            continue
+        k = src.find(ch, j)
+        if k < 0:
+            m.append(None)
+            continue
+        m.append(k)
+        j = k + 1
+    out, pos = [], 0
+    for tok in _tokens(shown):
+        ts = [times[m[i]] for i in range(pos, pos + len(tok)) if i < len(m) and m[i] is not None
+              and m[i] < len(times) and times[m[i]]]
+        if tok.strip() and ts:
+            out.append({"s": pos, "e": pos + len(tok), "dt0": round(ts[0][0] - cap_start, 3),
+                        "dt1": round(ts[-1][1] - cap_start, 3)})
+        pos += len(tok)
+    return out
 
 
 def auto_keywords(edl: dict, nar: dict) -> set[str]:
@@ -586,6 +632,11 @@ def apply_beat_sync(edl: dict, analysis: dict | None, base: Path):
     for mm in (analysis or {}).get("music", []):
         if mm["path"] == mpath:
             beats = mm["beats"]
+    side = Path(mpath).with_suffix(".beats.json")  # exact grid from the music generator
+    if beats is None and side.exists():
+        beats = json.loads(side.read_text()).get("beats", [])
+        if bs.get("shift", 0) == "auto":
+            bs = {**bs, "shift": 0.0}  # the grid is exact: no phase search
     if beats is None:
         from analyze import music_beats
         beats = music_beats(mpath).get("beats", [])
@@ -626,12 +677,14 @@ def apply_beat_sync(edl: dict, analysis: dict | None, base: Path):
                 if c.get("type", "video") == "video":
                     sp = float(c.get("speed", 1.0))
                     a = float(c.get("in", 0))
-                    fz = L - (float(c["out"]) - a if c.get("out") is not None else float(c.get("dur", 2))) / sp
+                    # extra time from freezes/intros (from the unrounded length, so frame rounding
+                    # is not mistaken for it)
+                    fz = _clen_raw(c) - (float(c["out"]) - a if c.get("out") is not None else float(c.get("dur", 2))) / sp
                     c["out"] = round(a + (newL - fz) * sp, 3)
                     c.pop("dur", None)
                 else:
                     c["duration"] = round(newL, 3)
-                L = newL
+                L = length(c)  # the frame-rounded length actually rendered: no drift builds up
                 moved += 1
         acc += L
     log(f"beat_sync: {moved} cut(s) snapped to beats")
@@ -812,6 +865,9 @@ def build_subtitles(edl: dict, timeline: list[dict], analysis: dict | None) -> l
         it = anchor_to_clip(it, timeline)
         if it:
             it = {**shared, **it, "style": it.get("style", sub.get("style", "caption"))}
+            if it.get("words_rel"):  # aligned words (narration): relative -> output time
+                it["words"] = [{"s": w["s"], "e": w["e"], "t0": it["start"] + w["dt0"], "t1": it["start"] + w["dt1"]}
+                               for w in it.pop("words_rel")]
             if it.get("karaoke") and "words" not in it:
                 it["words"] = _even_words(it)
             items.append(it)

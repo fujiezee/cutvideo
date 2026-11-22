@@ -288,6 +288,10 @@ Keep `edl.json`: later change requests are edits to it plus a re-render.
   English); keys come from environment variables or an `env_file` outside the repo.
   `python3 $S/tts.py --show-config` prints what is in effect, `--list-models` what the
   provider offers. Check a new voice by ear-proxy: synthesise a line and run `qa.py`.
+- Music when there is none: `python3 $S/music.py --mood <tense|epic|calm|upbeat|retro>
+  --duration <s> --out $J/audio` (exact beat grid for beat sync). A music model on the
+  gateway is used first when `music.json` sets one; the Duaer gateway's Lyria models were
+  refused upstream on 2026-11-22, so the built-in generator is what runs today.
 - Speech clean-up: `"audio": {"voice": "clean"}` (or `"voice"` per clip): `clean`,
   `denoise`, `broadcast`. For talking heads, analyse with `--verbatim` and draft with
   `draft_edl.py --mode jumpcut --drop-fillers` to cut "um / uh / 嗯 / 呃" out.

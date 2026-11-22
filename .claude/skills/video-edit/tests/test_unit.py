@@ -345,3 +345,43 @@ def test_marked_lines_use_the_emphasis_style(tmp_path, monkeypatch):
     assert [c.get("style") for c in caps] == [None, "variety"]  # the short line stays one caption
     assert edl["narration"]["items"][1]["text"] == "四十年后，一切都变了。"
     assert "四十年后" in edl["subtitles"]["highlight"]
+
+
+# ---------------------------------------------------------------- music generator, follow captions
+def test_music_generator_beats_and_level():
+    import numpy as np
+    import music
+    st, info = music.generate("upbeat", 6.0, seed=3)
+    assert st.shape[1] == 2 and abs(len(st) / music.SR - 6.0) < 0.05
+    assert 0.5 < np.abs(st).max() <= 10 ** (-0.9 / 20)
+    assert np.allclose(np.diff(info["beats"]), 0.5)  # 120 BPM grid
+    for mood in music.MOODS:
+        s2, i2 = music.generate(mood, 3.0)
+        assert np.isfinite(s2).all() and i2["bpm"] > 0
+
+
+def test_follow_words_map_display_to_source():
+    times = [(0.0, 0.2), None, (0.4, 0.6), (0.6, 0.8)]
+    words = render._follow_words("托　姆和", "托，姆和", times, 0.0)
+    assert [(w["s"], w["dt0"]) for w in words] == [(0, 0.0), (2, 0.4), (3, 0.6)]
+
+
+def test_follow_karaoke_dims_unspoken_words():
+    fp = find_font()
+    item = {"text": "四十年后", "style": "explainer", "karaoke": "follow",
+            "words": [{"s": i, "e": i + 1, "t0": i * 0.2, "t1": (i + 1) * 0.2} for i in range(4)]}
+    a = render_text_block(item, 1920, 1080, fp, kara=0)
+    b = render_text_block(item, 1920, 1080, fp, kara=3)
+    assert a.size == b.size and a.tobytes() != b.tobytes()
+
+
+def test_beat_sync_does_not_drift(tmp_path):
+    m = tmp_path / "bed.wav"
+    m.write_bytes(b"")
+    m.with_suffix(".beats.json").write_text(json.dumps({"beats": [k * 0.5 for k in range(80)]}))
+    render.PLAN_FPS[0] = 30.0
+    clips = [{"src": "v1", "in": 10.0 * k, "out": 10.0 * k + 0.55} for k in range(24)]
+    edl = {"clips": clips, "music": [{"path": str(m)}], "beat_sync": {"music": 0, "every": 1, "shift": "auto"}}
+    render.apply_beat_sync(edl, None, tmp_path)
+    starts = render.plan_starts(edl["clips"])
+    assert max(abs((s + 0.25) % 0.5 - 0.25) for s in starts) < 1 / 30 + 1e-6, starts
