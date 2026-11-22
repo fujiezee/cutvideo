@@ -140,3 +140,20 @@ def test_autocut_generates_music_when_there_is_none(job):
     edl = json.loads((job / "auto" / "edl_beatmix.json").read_text())
     m = edl["music"][0]["path"]
     assert "music_upbeat" in m and (job / "auto" / m).resolve().with_suffix(".beats.json").exists()
+
+
+def test_split_ramp_stabilize_and_pip_render(job):
+    edl = {"analysis": "work/analysis.json",
+           "output": {"path": "out/layers.mp4", "width": 640, "height": 360, "fps": 24, "fit": "crop"},
+           "clips": [{"src": "v1", "in": 0.2, "out": 2.6},
+                     {"type": "split", "layout": "grid", "duration": 1.5,
+                      "items": [{"src": "v1", "in": 3.2, "out": 5.0}, {"src": "v1", "in": 6.2, "out": 8.0},
+                                {"src": "v1", "in": 9.2, "out": 11.0}, {"src": "v1", "in": 12.2, "out": 14.0}]},
+                     {"src": "v1", "in": 15.2, "out": 17.2, "ramp": [[0, 1.0], [0.5, 0.5], [1.5, 1.0]],
+                      "smooth": "blend"},
+                     {"src": "v1", "in": 18.2, "out": 20.0, "stabilize": True}],
+           "layers": [{"src": "v1", "in": 21.2, "out": 23.0, "clip": 0, "start": 0.3, "width": 0.3, "volume": 0.5}]}
+    rep = render(edl, job, "edl_layers", "--draft")
+    p = probe(rep["output"])
+    plan = 2.4 + 1.5 + sum(dt / sp for _, dt, sp in __import__("render").ramp_steps(edl["clips"][2])) + 1.8
+    assert abs(p["dur"] - plan) < 0.2 and (p["w"], p["h"]) == (320, 180)

@@ -116,6 +116,15 @@ Worked examples with plans and build scripts: `examples/tears-of-steel/` in the 
 - Sci-fi / tech moments: `hologram` beside a screen or a person, `grid` under neon shots,
   `streaks` across fast action; one effect per shot, a few shots per video.
 
+## Reaction, comparison, before/after
+
+- Reaction: the content full frame, the face as a `layers` window (top right, `slide`,
+  `volume` for their voice); keep the window on screen for whole sentences.
+- Comparison / before-after: `split` with `layout: "lr"` and a `tag` text on each side.
+- Group moments or a cast roll call: `split` `grid` with four faces, 2-3 s.
+- Action peak: a `ramp` into slow motion on the impact (`smooth` on moderate motion,
+  `"blend"` on chaotic action), a `boom` on the slow part, back to speed after.
+
 ## Multi-camera / multiple takes of the same moment
 
 Match moments by transcript text or by visual content, keep the best-framed angle for each

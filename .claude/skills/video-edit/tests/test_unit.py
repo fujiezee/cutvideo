@@ -385,3 +385,22 @@ def test_beat_sync_does_not_drift(tmp_path):
     render.apply_beat_sync(edl, None, tmp_path)
     starts = render.plan_starts(edl["clips"])
     assert max(abs((s + 0.25) % 0.5 - 0.25) for s in starts) < 1 / 30 + 1e-6, starts
+
+
+# ---------------------------------------------------------------- speed ramps
+def test_ramp_duration_and_expression():
+    c = {"src": "v1", "in": 10.0, "out": 13.0, "ramp": [[0, 1.0], [1.0, 0.25], [2.0, 0.25], [2.5, 1.0]]}
+    steps = render.ramp_steps(c)
+    assert abs(sum(dt for _, dt, _ in steps) - 3.0) < 1e-6
+    out = sum(dt / sp for _, dt, sp in steps)
+    assert 7.0 < out < 7.5  # exact integral of 1/speed: 1.85 + 4 + 0.92 + 0.5 = 7.27 s
+    render.PLAN_FPS[0] = 24.0
+    assert abs(render._clen_raw(c) - out) < 1e-6
+    expr = render.ramp_setpts(steps)
+    assert expr.startswith("(min(max(T-0.000,0)") and expr.endswith(")/TB")
+
+
+def test_split_length_is_the_shortest_item():
+    c = {"type": "split", "items": [{"src": "v1", "in": 0, "out": 3}, {"src": "v1", "in": 5, "out": 7}]}
+    assert render._clen_raw(c) == 2.0
+    assert render._clen_raw({**c, "duration": 1.5}) == 1.5

@@ -248,6 +248,40 @@ Transcript words are mapped through every clip's `in/out/speed` onto the output 
 `width` ≤ 1 = fraction of frame width. `end: null` = until the end.
 Built-in full-frame overlay: `{"preset": "scanlines", "opacity": 0.22}` (CRT / VHS lines).
 
+## Split screen, speed ramps, slow motion, stabilisation
+
+```json
+{"type": "split", "layout": "lr", "duration": 3.0, "audio": 0, "gap": 0.008,
+ "items": [{"src": "v1", "in": 316.0, "out": 319.6, "focus": "track"},
+           {"src": "v1", "in": 320.1, "out": 322.1, "focus": "track"}]}
+```
+
+- `type: "split"`: several clips at once. `layout`: `lr`, `tb`, `grid` (2x2), `three`, or
+  `cells` as `[[x, y, w, h], ...]` fractions. Each item is cropped to its cell (its own
+  `focus`, `fit`, `grade`). Length: `duration`, else the shortest item. `audio`: the index of
+  the item whose sound plays.
+- `"ramp": [[src_seconds, speed], ...]` on a video clip: speed changes smoothly between the
+  keyframes (relative to `in`), e.g. `[[0, 1], [0.9, 0.25], [2.2, 0.25], [2.7, 1]]`. Ramped
+  clips are muted (let music carry them); the timeline uses the exact ramped length.
+- `"smooth": true` with `speed` < 1 or a ramp: motion-interpolated in-between frames
+  (`minterpolate` mci). Best on moderate motion; on fast, chaotic action it can smear: use
+  `"smooth": "blend"` (cross-fades) there.
+- `"stabilize": true` (or a zoom amount such as 0.08): removes hand shake (`deshake`) and
+  zooms in slightly to hide the moving edges.
+
+## layers (picture in picture)
+
+```json
+"layers": [{"src": "v1", "in": 536.2, "out": 540.0, "clip": 0, "start": 0.6, "width": 0.3,
+            "pos": [0.96, 0.07], "anim": "slide", "radius": 0.06, "border": "#FFFFFF", "volume": 0}]
+```
+
+A clip in a rounded window above the picture (below texts): `width` (fraction of the frame),
+`aspect` (default: the source's), `pos` (anchored like texts: right/top edges near 1/0),
+`radius`, `border` (`""` for none), `border_width`, `shadow`, `anim` (`slide` from the near
+edge, `fade`, `none`), placement by `clip` + `start` or absolute `at`. `volume` > 0 mixes
+the window's sound in. Reaction videos: the main clip full frame, the reaction as a layer.
+
 ## overlays
 
 Three.js light effects or any alpha video above the picture and below the text:

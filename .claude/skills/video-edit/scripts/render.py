@@ -395,9 +395,64 @@ VOICE = {
 }
 
 
+SPLIT_LAYOUTS = {  # cells as [x, y, w, h] fractions of the frame
+    "lr": [[0, 0, 0.5, 1], [0.5, 0, 0.5, 1]],
+    "tb": [[0, 0, 1, 0.5], [0, 0.5, 1, 0.5]],
+    "grid": [[0, 0, 0.5, 0.5], [0.5, 0, 0.5, 0.5], [0, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
+    "three": [[0, 0, 0.5, 1], [0.5, 0, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
+}
+
+
+def render_split(i: int, clip: dict, ctx: dict) -> dict:
+    """Several clips side by side (lr / tb / grid / three or custom "cells"), with a gap."""
+    W, H, fps = ctx["W"], ctx["H"], ctx["fps"]
+    cells = clip.get("cells") or SPLIT_LAYOUTS[clip.get("layout", "lr")]
+    items = clip["items"][:len(cells)]
+    gap = int(round(float(clip.get("gap", 0.008)) * min(W, H)))
+    total = split_len(clip)
+    parts, boxes = [], []
+    for k, (it, (cx, cy, cw, ch)) in enumerate(zip(items, cells)):
+        x0, y0 = int(cx * W), int(cy * H)
+        x1, y1 = int((cx + cw) * W), int((cy + ch) * H)
+        x0 += gap // 2 if x0 > 0 else 0
+        y0 += gap // 2 if y0 > 0 else 0
+        x1 -= gap // 2 if x1 < W else 0
+        y1 -= gap // 2 if y1 < H else 0
+        w_, h_ = (x1 - x0) // 2 * 2, (y1 - y0) // 2 * 2
+        sub = {**it, "type": it.get("type", "video"), "fit": it.get("fit", "crop"),
+               "grade": it.get("grade", clip.get("grade", ctx["grade"]))}
+        sub.pop("transition", None)
+        r = render_clip(100000 + i * 10 + k, sub, {**ctx, "W": w_, "H": h_})
+        parts.append(r)
+        boxes.append((x0, y0))
+    key = hashlib.sha1(json.dumps({"c": {k: v for k, v in clip.items() if k not in AUDIO_KEYS}, "W": W, "H": H,
+                                   "fps": fps, "p": [p["path"] for p in parts]}, sort_keys=True).encode()).hexdigest()[:12]
+    out = ctx["clip_dir"] / f"c{i:03d}_split_{key}.mp4"
+    akey = int(clip.get("audio", 0))
+    audio = parts[akey]["audio"] if 0 <= akey < len(parts) else None
+    if out.exists():
+        return {"path": str(out), "duration": probe(out)["duration"], "cached": True, "audio": audio}
+    inputs = ["-f", "lavfi", "-i", f"color=c={clip.get('bg', '#000000')}:s={W}x{H}:r={fps}:d={total + 1:.3f}"]
+    graph, cur = [], "[0:v]"
+    for k, (p_, (x, y)) in enumerate(zip(parts, boxes)):
+        inputs += ["-i", p_["path"]]
+        graph.append(f"[{k + 1}:v]setpts=PTS-STARTPTS[s{k}]")
+        graph.append(f"{cur}[s{k}]overlay={x}:{y}:eof_action=repeat[o{k}]")
+        cur = f"[o{k}]"
+    graph.append(f"{cur}format=yuv420p,setsar=1[v]")
+    nframes = max(1, round(total * fps))
+    enc = ["-c:v", "libx264", "-preset", ctx["clip_preset"], "-crf", str(ctx["clip_q"]), "-g", str(int(fps))]
+    tmp = out.with_name(out.stem + ".part.mp4")
+    ffmpeg([*inputs, "-filter_complex", ";".join(graph), "-map", "[v]", "-an", "-frames:v", str(nframes), *enc, str(tmp)])
+    tmp.replace(out)
+    return {"path": str(out), "duration": probe(out)["duration"], "cached": False, "audio": audio}
+
+
 def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     W, H, fps = ctx["W"], ctx["H"], ctx["fps"]
     kind = clip.get("type", "video")
+    if kind == "split":
+        return render_split(i, clip, ctx)
     speed = float(clip.get("speed", 1.0))
     effects = list(clip.get("effects", []))
     names = {e.get("type") for e in effects}
@@ -438,7 +493,10 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
         has_audio = info.get("has_audio", False) and not clip.get("mute")
         inputs = ["-ss", f"{a:.3f}", "-t", f"{src_dur:.3f}", "-i", clip["path"]]
 
-    dur = src_dur / speed
+    steps = ramp_steps(clip) if (kind == "video" and clip.get("ramp")) else None
+    dur = sum(dt / sp for _, dt, sp in steps) if steps else src_dur / speed
+    if steps:  # speed ramps: the music carries; ramped speech would be unintelligible
+        has_audio = False
     freeze = next((e for e in effects if e.get("type") == "freeze"), None)
     total = dur + (float(freeze.get("duration", 0.6)) if freeze else 0)
 
@@ -471,8 +529,20 @@ def render_clip(i: int, clip: dict, ctx: dict) -> dict:
     vf = []
     if "reverse" in names:
         vf.append("reverse")
-    if speed != 1.0:
+    if clip.get("stabilize"):  # remove hand shake, then zoom slightly to hide the moving edges
+        z = 1.0 + float(clip["stabilize"] if not isinstance(clip["stabilize"], bool) else 0.06)
+        vf.append("deshake=rx=48:ry=48:edge=mirror")
+        vf.append(f"scale=trunc(iw*{z}/2)*2:trunc(ih*{z}/2)*2,crop=trunc(iw/{z}/2)*2:trunc(ih/{z}/2)*2")
+    if steps:
+        vf.append(f"setpts='{ramp_setpts(steps)}'")  # quoted: the expression has commas
+    elif speed != 1.0:
         vf.append(f"setpts=PTS/{speed}")
+    if clip.get("smooth") and (steps and min(sp for _, _, sp in steps) < 1 or speed < 1):
+        # motion-interpolated in-between frames: slow motion without stutter
+        if clip["smooth"] == "blend":  # cross-fade in-betweens: softer, no warping on chaotic motion
+            vf.append(f"minterpolate=fps={fps}:mi_mode=blend")
+        else:
+            vf.append(f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1")
     geom = names & {"zoom_in", "zoom_out", "ken_burns", "punch", "shake"}
     if fit == "pad" and kind != "color" and geom:
         # letterboxed: move/zoom the picture inside the frame, keep the bars static
@@ -703,9 +773,58 @@ def _clen(c, quantize=True):
     return max(1, round(L * PLAN_FPS[0])) / PLAN_FPS[0] if quantize else L
 
 
+def _hex_rgba(c: str):
+    c = c.lstrip("#")
+    v = [int(c[i:i + 2], 16) for i in range(0, len(c), 2)]
+    return tuple(v + [255] * (4 - len(v)))
+
+
+def ramp_steps(c, step=0.1):
+    """[(src_t0, src_dt, speed)] for a speed ramp: "ramp": [[src_seconds, speed], ...] relative
+    to the clip's in-point, linear between keyframes (constant outside them)."""
+    keys = sorted((float(t), float(v)) for t, v in c["ramp"])
+    a = float(c.get("in", 0))
+    b = float(c["out"]) if c.get("out") is not None else a + float(c.get("dur", 2))
+    L, out, t = b - a, [], 0.0
+    while t < L - 1e-6:
+        dt = min(step, L - t)
+        m = t + dt / 2
+        if m <= keys[0][0]:
+            sp = keys[0][1]
+        elif m >= keys[-1][0]:
+            sp = keys[-1][1]
+        else:
+            for (t0, s0), (t1, s1) in zip(keys, keys[1:]):
+                if t0 <= m <= t1:
+                    sp = s0 + (s1 - s0) * (m - t0) / max(t1 - t0, 1e-6)
+                    break
+        out.append((t, dt, max(0.05, sp)))
+        t += dt
+    return out
+
+
+def ramp_setpts(steps) -> str:
+    """setpts expression mapping source time to ramped output time (sum of clamped pieces)."""
+    terms = [f"min(max(T-{t0:.3f},0),{dt:.3f})/{sp:.4f}" for t0, dt, sp in steps]
+    return "(" + "+".join(terms) + ")/TB"
+
+
+def split_len(c):
+    items = c.get("items", [])
+    if c.get("duration"):
+        return float(c["duration"])
+    lens = [_clen_raw({**it, "type": it.get("type", "video")}) for it in items]
+    return min(lens) if lens else 2.0
+
+
 def _clen_raw(c):
+    if c.get("type") == "split":
+        return split_len(c)
     if c.get("type", "video") != "video":
         return float(c.get("duration", 2 if c.get("type") == "color" else 3))
+    if c.get("ramp"):
+        it = intro_of(c, PLAN_FPS[0])
+        return sum(dt / sp for _, dt, sp in ramp_steps(c)) + (it[2] if it else 0.0)
     a = float(c.get("in", 0))
     b = float(c["out"]) if c.get("out") is not None else a + float(c.get("dur", 2))
     fz = sum(float(e.get("duration", 0.6)) for e in c.get("effects", []) if e.get("type") == "freeze")
@@ -1028,6 +1147,19 @@ def main():
     for c in edl["clips"]:
         if c.get("type", "video") == "video":
             c["path"] = resolve_src(c.get("src") or c.get("path"), analysis, base)
+        elif c.get("type") == "split":
+            for it in c.get("items", []):
+                if it.get("type", "video") == "video":
+                    it["path"] = resolve_src(it.get("src") or it.get("path"), analysis, base)
+    for ly in edl.get("layers", []):  # picture-in-picture sources; their sound joins the mix
+        ly["path"] = resolve_src(ly.get("src") or ly.get("path"), analysis, base)
+        if float(ly.get("volume", 0)) > 0:
+            snd = {"path": ly["path"], "in": float(ly.get("in", 0)), "volume": float(ly["volume"]),
+                   "fade_in": 0.1, "fade_out": 0.3}
+            if ly.get("out") is not None:
+                snd["out"] = float(ly["out"])
+            snd.update({k: ly[k] for k in ("clip", "start", "at") if k in ly})
+            edl.setdefault("sounds", []).append(snd)
         elif c.get("type") == "image":
             c["path"] = resolve_src(c["path"], None, base)
     for m in edl.get("music", []):
@@ -1145,6 +1277,68 @@ def main():
         parts.append(f"{cur_v}[ovl{k}]overlay=0:0:eof_action=pass:format=auto[vov{k}]")
         cur_v = f"[vov{k}]"
         vin += 1
+    # picture-in-picture layers: a clip in a rounded window (border, shadow, slide in)
+    for k, ly in enumerate(edl.get("layers", [])):
+        if "clip" in ly:
+            t0 = timeline[int(ly["clip"])]["out_start"] + float(ly.get("start", 0))
+        else:
+            t0 = float(ly.get("at", ly.get("start", 0)))
+        src_in = float(ly.get("in", 0))
+        src_out = float(ly["out"]) if ly.get("out") is not None else src_in + 3.0
+        ldur = min((src_out - src_in) / float(ly.get("speed", 1.0)), total - t0)
+        if ldur < 0.1:
+            continue
+        si = cprobe(ly["path"])
+        aspect = float(ly.get("aspect", si["width"] / max(si["height"], 1)))
+        lw = int(float(ly.get("width", 0.32)) * W) // 2 * 2
+        lh = int(lw / aspect) // 2 * 2
+        pos = ly.get("pos", [0.95, 0.06])
+        X = int(pos[0] * W - lw * (0 if pos[0] < 0.15 else 1 if pos[0] > 0.85 else 0.5))
+        Y = int(pos[1] * H - lh * (0 if pos[1] < 0.1 else 1 if pos[1] > 0.9 else 0.5))
+        sub = {k2: v for k2, v in ly.items() if k2 in ("src", "path", "in", "out", "speed", "focus", "fit", "grade",
+                                                         "adjust", "effects", "stabilize", "smooth")}
+        sub.update({"type": "video", "fit": ly.get("fit", "crop"), "out": src_out, "mute": True})
+        r = render_clip(200000 + k, sub, {**ctx, "W": lw, "H": lh})
+        rad = int(float(ly.get("radius", 0.06)) * min(lw, lh))
+        bw = max(0, int(float(ly.get("border_width", 0.006)) * min(W, H))) if ly.get("border", "#FFFFFF") else 0
+        mask_p = work / f"layer{k}_mask.png"
+        frame_p = work / f"layer{k}_frame.png"
+        from PIL import Image as _I, ImageDraw as _D, ImageFilter as _F
+        m = _I.new("L", (lw, lh), 0)
+        _D.Draw(m).rounded_rectangle([0, 0, lw - 1, lh - 1], radius=rad, fill=255)
+        m.save(mask_p)
+        pad_ = int(0.04 * min(W, H))
+        fr = _I.new("RGBA", (lw + 2 * pad_, lh + 2 * pad_), (0, 0, 0, 0))
+        if ly.get("shadow", True):
+            sh = _I.new("RGBA", fr.size, (0, 0, 0, 0))
+            _D.Draw(sh).rounded_rectangle([pad_, pad_ + pad_ // 3, pad_ + lw, pad_ + lh + pad_ // 3], radius=rad,
+                                         fill=(0, 0, 0, 150))
+            fr.alpha_composite(sh.filter(_F.GaussianBlur(pad_ / 2.5)))
+        if bw:
+            _D.Draw(fr).rounded_rectangle([pad_ - bw, pad_ - bw, pad_ + lw + bw - 1, pad_ + lh + bw - 1],
+                                          radius=rad + bw, fill=_hex_rgba(ly.get("border", "#FFFFFF")))
+        fr.save(frame_p)
+        anim = ly.get("anim", "slide")
+        a_in = 0.35
+        t1 = t0 + ldur
+        if anim == "slide":  # glide in from the nearer side edge, ease-out
+            off = (W - X + pad_) if X + lw / 2 > W / 2 else -(X + lw + pad_)
+            xs = f"{X}+({off})*pow(max(0,1-(t-{t0:.3f})/{a_in}),3)"
+        else:
+            xs = str(X)
+        inputs += ["-i", r["path"], "-loop", "1", "-framerate", str(fps), "-t", f"{ldur:.3f}", "-i", str(mask_p),
+                   "-loop", "1", "-framerate", str(fps), "-t", f"{ldur:.3f}", "-i", str(frame_p)]
+        fo = min(0.3, ldur / 3)
+        fade = f"fade=t=in:st=0:d=0.25:alpha=1,fade=t=out:st={ldur - fo:.3f}:d={fo:.3f}:alpha=1" \
+            if anim in ("fade", "slide") else "null"
+        parts.append(f"[{vin}:v]setpts=PTS-STARTPTS,format=rgba[lyv{k}];[{vin + 1}:v]format=gray[lym{k}];"
+                     f"[lyv{k}][lym{k}]alphamerge,{fade},setpts=PTS+{t0:.3f}/TB[ly{k}]")
+        parts.append(f"[{vin + 2}:v]format=rgba,{fade},setpts=PTS+{t0:.3f}/TB[lyf{k}]")
+        en = f"between(t,{t0:.3f},{t1:.3f})"
+        parts.append(f"{cur_v}[lyf{k}]overlay=x='{xs}-{pad_}':y={Y - pad_}:eval=frame:enable='{en}':format=auto[lya{k}]")
+        parts.append(f"[lya{k}][ly{k}]overlay=x='{xs}':y={Y}:eval=frame:enable='{en}':format=auto[lyb{k}]")
+        cur_v = f"[lyb{k}]"
+        vin += 3
     if layer_list:
         inputs += ["-f", "concat", "-safe", "0", "-i", str(layer_list)]
         parts.append(f"[{vin}:v]format=rgba,setpts=PTS-STARTPTS[lay]")
