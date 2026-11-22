@@ -116,7 +116,10 @@ Old Thom wants to rewrite the past. | @P2 2:00-4:10
 ```
 
 Mark words to colour in the captions with braces, `{Celia}`; names and numbers are
-coloured automatically. Pass it with `--script recap.txt [--caption-style explainer|boxed]`. Each line is spoken
+coloured automatically, and captions with a marked word switch to `--emphasis-style`
+(default `variety`), so mark only the key lines. Pass it with `--script recap.txt
+[--caption-style explainer]`. Choose caption designs by eye: `python3 $S/captions.py
+VIDEO --at T --out $J/work/caption_styles.jpg` renders every style on one frame. Each line is spoken
 (`tts.py`), its shots fill exactly the length of the line, music ducks under the voice, and
 captions follow the narration.
 

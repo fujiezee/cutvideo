@@ -317,3 +317,31 @@ def test_cjk_captions_break_between_phrases():
             assert not c.startswith(("的", "了")) and len(c) <= 15, chunks
         if "四十年" in text:
             assert any("四十年" in c for c in chunks), chunks
+
+
+# ---------------------------------------------------------------- caption designs
+def test_every_caption_style_renders():
+    from captions import CAPTION_STYLES
+    fp = find_font()
+    for name in CAPTION_STYLES:
+        img = render_text_block({"text": "四十年后 robots", "style": name, "highlight": ["robots"]}, 1920, 1080, fp)
+        assert img.mode == "RGBA" and img.getbbox() is not None, name
+
+
+def test_full_caption_highlight_is_dropped():
+    fp = find_font()
+    a = render_text_block({"text": "四十年后", "style": "variety", "highlight": ["四十年后"]}, 1920, 1080, fp)
+    b = render_text_block({"text": "四十年后", "style": "variety"}, 1920, 1080, fp)
+    assert a.tobytes() == b.tobytes()
+
+
+def test_marked_lines_use_the_emphasis_style(tmp_path, monkeypatch):
+    import tts
+    monkeypatch.setattr(tts, "synth", lambda text, d, voice=None, rate=None, config=None: (tmp_path / "x.wav", 2.0))
+    edl = {"narration": {"emphasis_style": "variety", "items": [
+        {"text": "平常的一句话。", "at": 0}, {"text": "{四十年后}，一切都变了。", "at": 3}]}}
+    render.prepare_narration(edl, tmp_path / ".render")
+    caps = edl["subtitles"]["items"]
+    assert [c.get("style") for c in caps] == [None, "variety"]  # the short line stays one caption
+    assert edl["narration"]["items"][1]["text"] == "四十年后，一切都变了。"
+    assert "四十年后" in edl["subtitles"]["highlight"]

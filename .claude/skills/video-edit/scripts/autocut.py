@@ -522,7 +522,7 @@ def r_recap(f, P, o):
         texts.append(credit)
     edl = {"output": {"width": 1920, "height": 1080, "fps": 24, "fit": "crop"}, "grade": "trailer", "clips": clips,
            "music": music_block(o["music"], 0.4, duck=True),  # dense narration needs a quiet bed
-           "narration": {"items": items, "volume": 1.25, **({"voice": o["voice"]} if o.get("voice") else {}),
+           "narration": {"items": items, "volume": 1.25, "emphasis_style": o.get("emphasis_style") or None, **({"voice": o["voice"]} if o.get("voice") else {}),
                          **({"rate": o["rate"]} if o.get("rate") else {})},
            "subtitles": {"enabled": True, "from": "manual", "style": o.get("caption_style", "explainer")},
            "texts": texts}
@@ -635,7 +635,9 @@ def main():
     ap.add_argument("--script", default=None, help="recap narration: text file, one sentence per line")
     ap.add_argument("--voice", default=None, help="tts voice (tts.py --voices)")
     ap.add_argument("--rate", type=int, default=None, help="tts speaking rate (words per minute)")
-    ap.add_argument("--caption-style", default="explainer", help="narration captions: explainer | boxed | caption")
+    ap.add_argument("--caption-style", default="explainer", help="narration captions (captions.py --list)")
+    ap.add_argument("--emphasis-style", default="variety",
+                    help="captions with a {marked} word switch to this style ('' to keep one style)")
     ap.add_argument("--no-brand", action="store_true", help="no product signature on the end card")
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--no-render", action="store_true")
@@ -658,7 +660,7 @@ def main():
     script = ([ln.strip() for ln in Path(a.script).read_text(encoding="utf-8").splitlines() if ln.strip()]
               if a.script else [])
     o = {"music": music, "title": title, "credit": a.credit, "videos": an["videos"], "script": script,
-         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "brand": not a.no_brand, "caption_style": a.caption_style,
+         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "brand": not a.no_brand, "caption_style": a.caption_style, "emphasis_style": a.emphasis_style,
          "palette": load_brand(job)["colors"], "tts_config": load_tts_config(job)}
     auto_dir.mkdir(exist_ok=True)
     (job / "out").mkdir(exist_ok=True)

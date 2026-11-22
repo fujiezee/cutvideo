@@ -45,6 +45,28 @@ STYLES = {
     "boxed":       {"weight": "bold", "size": 0.05, "color": "#FFFFFF", "box": "#000000A8", "accent_bar": "#FFD60A",
                     "pos": "caption", "highlight_color": "#FFD60A", "anim": "slide_up", "anim_in": 0.18,
                     "anim_out": 0.1, "max_width": 0.8},
+    # variety-show caption (综艺花字): warm gradient fill, dark outline plus a white outer
+    # outline, drop shadow, slight tilt, bouncy pop
+    "variety":     {"weight": "bold", "size": 0.074, "color": "#FFF36B", "fill_gradient": ["#FFF8A6", "#FF9A1F"],
+                    "stroke_color": "#5A1E00", "stroke": 0.12, "outline2": "#FFFFFF", "outline2_width": 0.08,
+                    "shadow": True, "pos": "caption", "anim": "pop", "anim_in": 0.2, "anim_out": 0.08,
+                    "rotate": -2, "highlight_color": "#FF3B6B", "max_width": 0.84},
+    # film subtitles: light serif, wide spacing, soft shadow, slow fade
+    "cinema":      {"size": 0.046, "color": "#F4F1EA", "font": "serif", "tracking": 0.06, "shadow": True,
+                    "stroke_color": "#000000B4", "stroke": 0.05,
+                    "pos": [0.5, 0.9], "anim": "fade", "anim_in": 0.3, "anim_out": 0.3,
+                    "highlight_color": "#E8C27A", "max_width": 0.8},
+    "neon_caption": {"weight": "bold", "size": 0.056, "color": "#FFF0FB", "glow": "#FF2BD6", "pos": "caption",
+                     "anim": "fade", "anim_in": 0.15, "anim_out": 0.1, "highlight_color": "#7CF7FF"},
+    # vertical-video big words, centre of the lower half
+    "bigword":     {"weight": "bold", "size": 0.095, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.12,
+                    "shadow": True, "pos": "center_low", "anim": "pop", "anim_in": 0.16, "anim_out": 0.08,
+                    "highlight_color": "#FFD60A", "max_width": 0.82, "line_spacing": 1.05},
+    "news":        {"weight": "bold", "size": 0.046, "color": "#FFFFFF", "box": "#0A3D91E6", "accent_bar": "#FFD60A",
+                    "align": "left", "pos": "lower_left", "anim": "slide_up", "anim_in": 0.2, "anim_out": 0.1,
+                    "highlight_color": "#FFD60A"},
+    "soft":        {"weight": "bold", "size": 0.046, "color": "#1A1A1A", "box": "#FFFFFFE6", "pos": "caption",
+                    "anim": "fade", "anim_in": 0.15, "anim_out": 0.1, "highlight_color": "#FF5A36"},
     "quote":       {"size": 0.065, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.04, "pos": "center", "anim": "typewriter", "shadow": True},
 }
 
@@ -206,9 +228,19 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
         d.rectangle([g, g, bw - 1 - g, bh - 1 - g], outline=_rgba(st["border"]), width=max(1, lw_ // 2))
     align = st.get("align", "center")
     hl_words = st.get("highlight") or []
+    if hl_words:  # a keyword that is (almost) the whole caption is not highlighted: the
+        # contrast would be lost and the style's own fill would disappear
+        covered = set()
+        for w in hl_words:
+            for m in re.finditer(re.escape(w), text):
+                covered.update(range(m.start(), m.end()))
+        visible = [i for i, ch in enumerate(text) if not ch.isspace() and ch != "\u3000"]
+        if visible and len(covered & set(visible)) >= 0.75 * len(visible):
+            hl_words = []
     line_colors = st.get("line_colors") or []
     stroke_fill = _rgba(st.get("stroke_color", "#000000"))
     kmaps = _karaoke_maps(st, text, kara) if (kara is not None and st.get("words")) else None
+    drawn = []
     cmap = _map_chars(text, full_lines) if kmaps else None
     for li, line in enumerate(lines):
         lw = _line_w(d, full_lines[li], font, track) if li < len(full_lines) else 0
@@ -242,13 +274,34 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
             img = Image.alpha_composite(img, gl.filter(ImageFilter.GaussianBlur(size * 0.28)))
             img = Image.alpha_composite(img, gl.filter(ImageFilter.GaussianBlur(size * 0.1)))
             d = ImageDraw.Draw(img)
+        outer = int(size * float(st.get("outline2_width", 0.07))) if st.get("outline2") else 0
         if st.get("shadow"):
             sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
             _draw_line(ImageDraw.Draw(sh), x + size * 0.05, y + size * 0.07, line, font, [(0, 0, 0, 170)] * len(line),
-                       stroke, (0, 0, 0, 170), track)
+                       stroke + outer, (0, 0, 0, 170), track)
             img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(size * 0.06)))
             d = ImageDraw.Draw(img)
+        if outer:  # second, outer outline (variety captions: dark inner + white outer)
+            oc = _rgba(st["outline2"])
+            _draw_line(d, x, y, line, font, [oc] * len(line), stroke + outer, oc, track)
         _draw_line(d, x, y, line, font, colors, stroke, stroke_fill, track, boxes)
+        drawn.append((x, y, line, colors))
+    if st.get("fill_gradient") and drawn:  # gradient on the letter faces only (outlines and
+        # highlighted words keep their colours)
+        hl_c = _rgba(st.get("highlight_color", "#FFE600"))
+        mask = Image.new("L", img.size, 0)
+        md = ImageDraw.Draw(mask)
+        for x, y, line, colors in drawn:
+            _draw_line(md, x, y, line, font, [0 if c == hl_c else 255 for c in colors], 0, 0, track)
+        c0, c1 = _rgba(st["fill_gradient"][0]), _rgba(st["fill_gradient"][1])
+        grad = Image.new("RGBA", img.size)
+        gd = ImageDraw.Draw(grad)
+        y0 = min(y for _, y, _, _ in drawn)
+        y1 = max(y for _, y, _, _ in drawn) + lh
+        for yy in range(img.height):
+            t_ = min(max((yy - y0) / max(y1 - y0, 1), 0), 1)
+            gd.line([(0, yy), (img.width, yy)], fill=tuple(int(c0[i] + (c1[i] - c0[i]) * t_) for i in range(4)))
+        img.paste(grad, (0, 0), mask)
     if st.get("gradient"):  # face filled with a vertical gradient (e.g. white -> gold)
         c0, c1 = _rgba(st["gradient"][0]), _rgba(st["gradient"][1])
         grad = Image.new("RGBA", img.size)

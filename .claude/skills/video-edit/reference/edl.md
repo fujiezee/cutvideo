@@ -187,9 +187,14 @@ that is visible (up to the midpoint of its transitions).
 - `size`: ≤ 1 = fraction of the frame's short side; > 1 = pixels at full resolution.
 - `anim`: `none`, `fade`, `pop`, `slide_up`, `typewriter`, `zoom` (`anim_in`, `anim_out`,
   `type_time`, `zoom` = push-in amount, default 0.08).
-- Caption designs: `explainer` (big bold white, heavy outline and soft shadow, keywords in
-  `highlight_color`, pops in) for narration and talking heads; `boxed` (translucent rounded
-  bar with an `accent_bar` stripe, slides up); `caption` (plain, the default for dialogue).
+- Caption designs (`captions.py VIDEO --at T` renders all of them on one frame):
+  `caption` plain dialogue; `explainer` big bold white, heavy outline, keywords coloured
+  (narration default); `variety` variety-show style, gradient fill (`fill_gradient`), dark
+  plus white outer outline (`outline2`, `outline2_width`), tilt; `bigword` large centred
+  words for vertical video; `boxed` translucent bar with an `accent_bar` stripe; `soft`
+  white rounded box with dark text; `news` blue bar, left aligned; `cinema` light serif with
+  wide spacing; `neon_caption` glow. A keyword that covers most of a caption is not
+  highlighted (the style's own fill shows instead).
 - `text3d` style and 3D keys: `depth` (extrusion, fraction of size), `extrude_color`,
   `extrude_angle` (degrees, screen direction of the sides), `gradient` [top, bottom] face
   colours, `shadow3d`, `rotate_y` / `rotate_x` (static perspective, degrees); animations
@@ -317,7 +322,8 @@ Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `esp
   (never inside a name or a number), commas replaced by a wide space, keywords coloured.
 - Keywords: names from `people.json`, numbers with their unit, and anything written as
   `{word}` in the narration text (the braces are not spoken). `"highlight": false` turns
-  this off.
+  this off. `"emphasis_style": "variety"` gives captions containing a `{marked}` word a
+  louder design, so key lines stand out from the rest.
 - Make each clip group at least as long as its line plus ~0.5 s; `--qa` then checks that
   every narration caption is intelligible in the mix.
 

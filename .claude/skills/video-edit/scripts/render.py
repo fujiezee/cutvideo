@@ -232,7 +232,9 @@ def prepare_narration(edl: dict, work: Path):
     # {keyword} marks words to highlight in the captions; braces are not spoken
     marked = set()
     for it in nar["items"]:
-        marked.update(m for m in re.findall(r"\{([^{}]+)\}", it["text"]))
+        found = re.findall(r"\{([^{}]+)\}", it["text"])
+        marked.update(found)
+        it["_marked"] = found
         it["text"] = re.sub(r"[{}]", "", it["text"])
     from tts import caption_chunks, load_config, synth
     job = work.parent if (work.parent / "tts.json").exists() else work.parent.parent  # auto/ EDLs
@@ -259,6 +261,10 @@ def prepare_narration(edl: dict, work: Path):
                 if short:  # explainer captions: no commas or full stops, a wide space instead
                     text = re.sub(r"\s*[，、；：]\s*", "\u3000", text).rstrip("。．.").strip("\u3000 ")
                 cap = {"text": text, "start": round(t0 + a, 3), "end": round(t0 + b, 3)}
+                # key lines (a {marked} word in this caption) switch to the emphasis style
+                emph = it.get("emphasis_style", nar.get("emphasis_style"))
+                if emph and any(w in text for w in it.get("_marked", [])):
+                    cap["style"] = emph
                 if "clip" in it:
                     cap["clip"] = it["clip"]
                 sub.setdefault("items", []).append(cap)
