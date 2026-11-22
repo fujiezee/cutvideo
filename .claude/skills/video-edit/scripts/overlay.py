@@ -36,6 +36,15 @@ STYLES = {
     "text3d":      {"weight": "bold", "size": 0.13, "color": "#FFFFFF", "gradient": ["#FFFFFF", "#FFD36B"],
                     "depth": 0.16, "extrude_color": "#8A5A12", "extrude_angle": 60, "pos": "center",
                     "anim": "flip_in", "anim_in": 0.7, "anim_out": 0.3, "tracking": 0.04},
+    # narration / explainer captions: big bold white, heavy outline + soft shadow, keywords in
+    # the accent colour, each caption pops in
+    "explainer":   {"weight": "bold", "size": 0.066, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.16,
+                    "shadow": True, "pos": "caption", "highlight_color": "#FFD60A", "anim": "pop",
+                    "anim_in": 0.16, "anim_out": 0.08, "max_width": 0.84},
+    # caption on a translucent rounded bar with an accent stripe on the left
+    "boxed":       {"weight": "bold", "size": 0.05, "color": "#FFFFFF", "box": "#000000A8", "accent_bar": "#FFD60A",
+                    "pos": "caption", "highlight_color": "#FFD60A", "anim": "slide_up", "anim_in": 0.18,
+                    "anim_out": 0.1, "max_width": 0.8},
     "quote":       {"size": 0.065, "color": "#FFFFFF", "stroke_color": "#000000", "stroke": 0.04, "pos": "center", "anim": "typewriter", "shadow": True},
 }
 
@@ -178,11 +187,18 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
     tw = max([_line_w(tmp, l, font, track) for l in full_lines] + [1])
     pad = int(size * 0.35) if st.get("box") else int(size * 0.9) if st.get("border") else \
         int(size * 0.6) if st.get("glow") else 0
-    bw, bh = int(tw + 2 * pad + 2 * stroke + 8), int(lh * len(full_lines) + 2 * pad + 2 * stroke + 8)
+    if st.get("box") and st.get("accent_bar"):
+        pad = int(size * 0.45)
+    bar = int(size * 0.14) if (st.get("box") and st.get("accent_bar")) else 0
+    bw, bh = int(tw + 2 * pad + 2 * stroke + 8 + bar), int(lh * len(full_lines) + 2 * pad + 2 * stroke + 8)
     img = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     if st.get("box"):
         d.rounded_rectangle([0, 0, bw - 1, bh - 1], radius=int(size * 0.25), fill=_rgba(st["box"]))
+        if bar:  # accent stripe on the left edge
+            d.rounded_rectangle([0, 0, bar + int(size * 0.25), bh - 1], radius=int(size * 0.25),
+                                fill=_rgba(st["accent_bar"]))
+            d.rectangle([bar, 0, bar + int(size * 0.25), bh - 1], fill=_rgba(st["box"]))
     if st.get("border"):  # double rule frame (silent-film intertitle)
         lw_ = max(2, int(size * 0.05))
         d.rectangle([lw_, lw_, bw - 1 - lw_, bh - 1 - lw_], outline=_rgba(st["border"]), width=lw_)
@@ -196,7 +212,7 @@ def render_text_block(item: dict, W: int, H: int, font_path: str | None, reveal:
     cmap = _map_chars(text, full_lines) if kmaps else None
     for li, line in enumerate(lines):
         lw = _line_w(d, full_lines[li], font, track) if li < len(full_lines) else 0
-        x = pad + stroke + 4 + ((tw - lw) / 2 if align == "center" else (tw - lw) if align == "right" else 0)
+        x = bar + pad + stroke + 4 + ((tw - lw) / 2 if align == "center" else (tw - lw) if align == "right" else 0)
         y = pad + stroke + 4 + li * lh
         base = _rgba(line_colors[li] if li < len(line_colors) else st.get("color"))
         hl = _rgba(st.get("highlight_color", "#FFE600"))

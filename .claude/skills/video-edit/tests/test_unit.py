@@ -303,3 +303,17 @@ def test_tts_env_file_and_model_list(tmp_path, monkeypatch):
     srv.shutdown()
     assert seen["auth"] == "Bearer k-123"
     assert ms == {"cosyvoice-v2": True, "deepseek-chat": False, "gpt-4o-mini-tts": True}
+
+
+def test_cjk_captions_break_between_phrases():
+    from tts import caption_chunks
+    prot = ["托姆", "西莉亚", "四十年"]
+    lines = {"最后，托姆终于说出了那句迟到四十年的对不起。": None,
+             "科学家们要做一件疯狂的事：把当年分手的那一刻重演一遍。": None}
+    for text in lines:
+        chunks = [c for c, _, _ in caption_chunks(text, 5, max_cjk=12, protect=prot)]
+        assert "".join(chunks).replace("，", "").replace("：", "") == text.replace("，", "").replace("：", "")
+        for c in chunks:
+            assert not c.startswith(("的", "了")) and len(c) <= 15, chunks
+        if "四十年" in text:
+            assert any("四十年" in c for c in chunks), chunks

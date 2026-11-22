@@ -115,7 +115,8 @@ Forty years later, robots rule the city. | 1:10-1:22
 Old Thom wants to rewrite the past. | @P2 2:00-4:10
 ```
 
-Pass it with `--script recap.txt [--voice Tingting] [--rate 190]`. Each line is spoken
+Mark words to colour in the captions with braces, `{Celia}`; names and numbers are
+coloured automatically. Pass it with `--script recap.txt [--caption-style explainer|boxed]`. Each line is spoken
 (`tts.py`), its shots fill exactly the length of the line, music ducks under the voice, and
 captions follow the narration.
 

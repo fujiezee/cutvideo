@@ -261,21 +261,89 @@ def _finish(raw: Path, wav: Path):
     raw.unlink(missing_ok=True)
 
 
-def caption_chunks(text: str, dur: float, max_cjk=16, max_latin=42) -> list[tuple[str, float, float]]:
-    """Split a spoken line into caption-sized pieces at punctuation, timed by length."""
-    parts = [p.strip() for p in re.split(r"(?<=[，。！？；、,.!?;:])\s*", text) if p.strip()]
+_BREAK_AFTER = set("了着过")            # aspect markers end a phrase
+_BREAK_BEFORE = set("和与把被给对从向在就也都还又却而且并只")  # these start one
+_NO_BREAK_AFTER = set("的地得一这那个")   # bind to what follows
+_NO_BREAK_BEFORE = set("的地得了着过们吗呢吧")  # cannot start a caption line
+
+
+def _word_bounds(p: str):
+    """Word boundaries from jieba when installed (else None: every position allowed)."""
+    try:
+        import jieba
+    except ImportError:
+        return None
+    jieba.setLogLevel(60)
+    b, i = set(), 0
+    for w in jieba.cut(p):
+        i += len(w)
+        b.add(i)
+    return b
+_NUMERAL = set("零一二两三四五六七八九十百千万亿0123456789")
+
+
+def _split_cjk(p: str, limit: int, protect=()) -> list[str]:
+    """Split a long CJK phrase into balanced pieces of at most ~limit characters, never
+    inside a protected word or a number, preferring a cut after a particle (的/了/在/和...)."""
+    n = len(p)
+    k = -(-n // limit)
+    if k <= 1:
+        return [p]
+    banned = set()
+    for w in protect:
+        for m in re.finditer(re.escape(w), p):
+            banned.update(range(m.start() + 1, m.end()))
+    for i in range(1, n):
+        if p[i - 1] in _NUMERAL and p[i] in _NUMERAL | set("年岁天个次"):
+            banned.add(i)
+    words = _word_bounds(p)
+    cuts, start = [], 0
+    for j in range(1, k):
+        ideal = round(n * j / k)
+        best = None
+        for i in range(max(start + 2, ideal - 5), min(n - 2, ideal + 5) + 1):
+            if i in banned or (words is not None and i not in words):
+                continue
+            score = abs(i - ideal)
+            score -= 3 if p[i] in _BREAK_BEFORE else 0
+            score -= 3 if p[i - 1] in _BREAK_AFTER else 0
+            score += 4 if p[i - 1] in _NO_BREAK_AFTER else 0
+            score += 4 if p[i] in _NO_BREAK_BEFORE else 0
+            if best is None or score < best[0]:
+                best = (score, i)
+        if best:
+            cuts.append(best[1])
+            start = best[1]
+    pieces, a = [], 0
+    for c in cuts + [n]:
+        pieces.append(p[a:c])
+        a = c
+    return [x for x in pieces if x]
+
+
+def caption_chunks(text: str, dur: float, max_cjk=16, max_latin=42, protect=()) -> list[tuple[str, float, float]]:
+    """Split a spoken line into caption-sized pieces at punctuation, timed by length. Long
+    CJK phrases are balanced and never cut inside `protect` words or numbers."""
+    parts = [p.strip() for p in re.split(r"(?<=[，。！？；：、,.!?;:])\s*", text) if p.strip()]
     chunks = []
     for p in parts:
-        limit = max_cjk if lang_of(p) == "zh" else max_latin
-        while len(p) > limit * 1.3:
-            cut = p.rfind(" ", 0, limit) if lang_of(p) != "zh" else limit
-            cut = cut if cut > 0 else limit
-            chunks.append(p[:cut].strip())
-            p = p[cut:].strip()
-        if chunks and len(chunks[-1]) + len(p) <= limit:
-            chunks[-1] += ("" if lang_of(p) == "zh" else " ") + p
+        zh = lang_of(p) == "zh"
+        limit = max_cjk if zh else max_latin
+        if zh and len(p) > limit * 1.15:
+            pieces = _split_cjk(p, limit, protect)
         else:
-            chunks.append(p)
+            pieces = []
+            while not zh and len(p) > limit * 1.3:
+                cut = p.rfind(" ", 0, limit)
+                cut = cut if cut > 0 else limit
+                pieces.append(p[:cut].strip())
+                p = p[cut:].strip()
+            pieces.append(p)
+        for q in pieces:
+            if chunks and len(chunks[-1]) + len(q) <= limit and not re.search(r"[。！？.!?]$", chunks[-1]):
+                chunks[-1] += ("" if zh else " ") + q
+            else:
+                chunks.append(q)
     total = sum(len(c) for c in chunks) or 1
     out, t = [], 0.0
     for c in chunks:

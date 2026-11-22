@@ -187,6 +187,9 @@ that is visible (up to the midpoint of its transitions).
 - `size`: ≤ 1 = fraction of the frame's short side; > 1 = pixels at full resolution.
 - `anim`: `none`, `fade`, `pop`, `slide_up`, `typewriter`, `zoom` (`anim_in`, `anim_out`,
   `type_time`, `zoom` = push-in amount, default 0.08).
+- Caption designs: `explainer` (big bold white, heavy outline and soft shadow, keywords in
+  `highlight_color`, pops in) for narration and talking heads; `boxed` (translucent rounded
+  bar with an `accent_bar` stripe, slides up); `caption` (plain, the default for dialogue).
 - `text3d` style and 3D keys: `depth` (extrusion, fraction of size), `extrude_color`,
   `extrude_angle` (degrees, screen direction of the sides), `gradient` [top, bottom] face
   colours, `shadow3d`, `rotate_y` / `rotate_x` (static perspective, degrees); animations
@@ -309,7 +312,12 @@ Voice-over spoken by the system text-to-speech (`tts.py`: macOS `say`, else `esp
   trimmed), mixed with the dialogue, and feed the side-chain: music tracks with
   `"duck": true` dip under them.
 - `captions` (default true) adds manual captions split at punctuation and timed by length;
-  subtitle settings (`size`, `pos`, style) apply.
+  subtitle settings (`size`, `pos`, style) apply. Narration captions default to the
+  `explainer` style (`caption_style` changes it): short captions broken between phrases
+  (never inside a name or a number), commas replaced by a wide space, keywords coloured.
+- Keywords: names from `people.json`, numbers with their unit, and anything written as
+  `{word}` in the narration text (the braces are not spoken). `"highlight": false` turns
+  this off.
 - Make each clip group at least as long as its line plus ~0.5 s; `--qa` then checks that
   every narration caption is intelligible in the mix.
 

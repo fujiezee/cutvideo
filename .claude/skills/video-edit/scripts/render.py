@@ -229,6 +229,11 @@ def prepare_narration(edl: dict, work: Path):
     nar = edl.get("narration")
     if not nar or not nar.get("items"):
         return
+    # {keyword} marks words to highlight in the captions; braces are not spoken
+    marked = set()
+    for it in nar["items"]:
+        marked.update(m for m in re.findall(r"\{([^{}]+)\}", it["text"]))
+        it["text"] = re.sub(r"[{}]", "", it["text"])
     from tts import caption_chunks, load_config, synth
     job = work.parent if (work.parent / "tts.json").exists() else work.parent.parent  # auto/ EDLs
     cfg = load_config(job if (job / "tts.json").exists() else work.parent)
@@ -238,17 +243,48 @@ def prepare_narration(edl: dict, work: Path):
     sub = edl.setdefault("subtitles", {"enabled": True, "from": "manual"})
     if sub.get("enabled") is False and nar.get("captions", True):
         sub.update({"enabled": True, "from": "manual"})
+    sub.setdefault("style", nar.get("caption_style", "explainer"))
+    if nar.get("highlight", True):
+        sub["highlight"] = sorted(set(sub.get("highlight", [])) | marked | auto_keywords(edl, nar), key=len,
+                                  reverse=True)
     for it in nar["items"]:
         path, dur = synth(it["text"], work / "tts", it.get("voice", nar.get("voice")),
                           it.get("rate", nar.get("rate")), cfg)
         it["_path"], it["_dur"] = str(path), dur
         if nar.get("captions", True):
             t0 = float(it.get("start", it.get("at", 0)))
-            for text, a, b in caption_chunks(it["text"], dur):
+            short = sub.get("style") in ("explainer", "boxed")  # punchier, shorter captions
+            for text, a, b in caption_chunks(it["text"], dur, max_cjk=12 if short else 16,
+                                             max_latin=32 if short else 42, protect=sub.get("highlight", [])):
+                if short:  # explainer captions: no commas or full stops, a wide space instead
+                    text = re.sub(r"\s*[，、；：]\s*", "\u3000", text).rstrip("。．.").strip("\u3000 ")
                 cap = {"text": text, "start": round(t0 + a, 3), "end": round(t0 + b, 3)}
                 if "clip" in it:
                     cap["clip"] = it["clip"]
                 sub.setdefault("items", []).append(cap)
+
+
+def auto_keywords(edl: dict, nar: dict) -> set[str]:
+    """Words worth colouring in narration captions: names of recognised people (people.json
+    next to the analysis) and numbers with their unit (四十年, 40 years)."""
+    words = set()
+    an = edl.get("analysis")
+    if an:
+        pj = Path(an).parent / "people.json"
+        if not pj.is_absolute():
+            pj = Path(edl.get("_base", ".")) / pj
+        if pj.exists():
+            for p in load_json(pj).get("people", []):
+                for part in re.split(r"\s{2,}|·", p.get("name") or ""):
+                    part = part.strip()
+                    if part and not part.startswith("人物"):
+                        words.add(part)
+                        if part.startswith("老") and len(part) > 2:
+                            words.add(part[1:])
+    text = " ".join(it["text"] for it in nar["items"])
+    words |= set(re.findall(r"[零一二两三四五六七八九十百千万\d]+(?:年|岁|天|个|次|小时|分钟|年后|年前)", text))
+    words |= set(re.findall(r"\b\d+(?:\s?(?:years?|days?|hours?|minutes?|%))?", text))
+    return {w for w in words if w and w in text}
 
 
 def snap_intros_to_pauses(edl: dict, analysis: dict | None, reach: float = 0.8, min_gap: float = 0.12):
@@ -940,6 +976,7 @@ def main():
 
     from brand import apply_brand
     apply_brand(edl, base)
+    edl["_base"] = str(base)
     prepare_narration(edl, work)
     snap_intros_to_pauses(edl, analysis)
     apply_beat_sync(edl, analysis, base)
