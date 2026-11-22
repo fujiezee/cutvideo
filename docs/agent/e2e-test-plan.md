@@ -39,10 +39,14 @@ Automated:   test_pipeline.py::test_style_menu_scores_every_style
 ```text
 ID:          E2E-003
 Title:       Auto drafts in several styles
-Steps:       autocut.py work/analysis.json --styles all
-Expected:    one video per style, auto/report.md, auto/compare.jpg, loudness near
-             -14 LUFS, true peak <= -1 dBTP, brand signature on the end card
-Automated:   test_pipeline.py::test_autocut*
+Steps:       autocut.py work/analysis.json --styles all [--exclude credits ranges]
+Expected:    one video per style (title3d, text_behind, fx3d, talking included),
+             auto/report.md, auto/compare.jpg, loudness near -14 LUFS, true peak
+             <= -1 dBTP, brand signature on the end card; a style without footage or
+             a dependency (rembg, Node/puppeteer/Chrome, transcript) is listed with
+             its reason and the other styles still render
+Automated:   test_pipeline.py::test_autocut*, test_unit.py::test_*_recipe*,
+             test_unit.py::test_every_menu_style_has_a_recipe; L3 frames on real footage
 ```
 
 ```text

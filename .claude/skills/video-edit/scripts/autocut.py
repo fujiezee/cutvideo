@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -529,13 +530,224 @@ def r_recap(f, P, o):
     return edl, [f"{n} narration lines; check each line's shots illustrate it, swap shots in the EDL if not"]
 
 
+def _latin_name(name: str) -> str:
+    """'西莉亚  CELIA' -> 'CELIA' (the Latin part of a bilingual name, else the name)."""
+    parts = [p.strip() for p in re.split(r"\s{2,}|·|/", name or "") if p.strip()]
+    latin = [p for p in parts if p.isascii()]
+    return (latin[-1] if latin else parts[0] if parts else "").upper()
+
+
+def _person_in(f, s):
+    """The named recognised person whose face appears in shot s (largest face), or None."""
+    best = None
+    for p in f.get("people", []):
+        for a in p["appearances"]:
+            if a["vid"] == s["vid"] and s["start"] <= a["t"] < s["end"] and (best is None or a["area"] > best[1]):
+                best = (p, a["area"])
+    return best[0] if best else None
+
+
+def _fit_size(text: str, cap: float, width: float = 0.88, aspect: float = 16 / 9) -> float:
+    """Text size (fraction of frame height) so `text` in text3d spans at most `width` of the
+    frame width: CJK glyphs are about 1.05 em wide, Latin capitals about 0.72 em."""
+    em = sum(1.05 if ord(ch) > 0x2E80 else 0.72 if ch.strip() else 0.35 for ch in text) or 1
+    return round(min(cap, width * aspect / em), 3)
+
+
+def r_title3d(f, P, o):
+    """3D title opener: calm wide shot with a slow push-in, the title swings in on a hit,
+    then four quick story shots and the end card."""
+    notes, bg = [], None
+    # calmest long wide shot without people: long enough for the reveal, least motion
+    for s in sorted(f["establishing"], key=lambda s: (s["end"] - s["start"] >= 4.4, -s.get("motion", 1)),
+                    reverse=True):
+        p = P.piece(s, 4.6)
+        if p:
+            bg = (s, p)
+            break
+    if not bg:  # no calm wide shot: the best shot, blurred, carries the title
+        bg = next(iter(P.take(f["all"], 1, 4.6, key="score", min_gap=0)), None)
+        notes.append("no calm wide shot: the title sits on a blurred shot")
+    if not bg:
+        return None, ["no usable shots"]
+    s0, p0 = bg
+    fx0 = [{"type": "zoom_in", "amount": 0.08}, {"type": "vignette"}]
+    if notes:
+        fx0.append({"type": "blur", "amount": 14})
+    clips = [clip(s0, p0, focus="auto", volume=0.3, effects=fx0)]
+    story = P.take(f["action"] + f["closeups"], 4, 0.9, key="score", min_gap=20, fallback=f["all"])
+    for k, (s, p) in enumerate(story):
+        clips.append(clip(s, p, focus="auto", volume=0.3,
+                          effects=[{"type": "flash", "duration": 0.1}] if k == 0 else []))
+    last = len(clips) - 1
+    card, credit = end_card(o["credit"], 2.6)
+    clips.append(card)
+    L0 = p0[1] - p0[0]
+    edl = {"output": {"width": 1920, "height": 1080, "fps": 24, "fit": "crop"}, "grade": "trailer", "clips": clips,
+           "music": music_block(o["music"], 0.85),
+           "sounds": [{"sfx": "riser", "clip": 0, "start": 0.0, "volume": 0.5},
+                      {"sfx": "hit", "clip": 0, "start": 1.15, "volume": 0.8},
+                      {"sfx": "whoosh", "clip": 1, "start": 0.0, "volume": 0.5}],
+           "texts": [{"text": o["title"], "clip": 0, "start": 0.7, "end": round(L0 - 0.1, 2), "style": "text3d",
+                      "size": _fit_size(o["title"], 0.22, 0.8), "anim": "flip_in", "pos": [0.5, 0.45]},
+                     {"text": o["title"], "clip": -1, "start": 0.2, "end": 1.6, "style": "card", "size": 0.06,
+                      "pos": [0.5, 0.36]}] + ([credit] if credit else [])}
+    if o["music"] and len(clips) > 3:
+        edl["beat_sync"] = {"music": 0, "every": 1, "shift": "auto", "clips": [1, last]}
+    return edl, notes
+
+
+def r_text_behind(f, P, o):
+    """Big words between the background and the person, on static single-person shots:
+    the person's name when people are named, else the title."""
+    import importlib.util
+    if not importlib.util.find_spec("rembg"):
+        return None, ["text behind a person needs rembg (pip install rembg)"]
+    # named people first (one shot each), so every title is a name; else the film title
+    named, seen = [], set()
+    for s in sorted(f["portraits_static"], key=lambda s: -s["face_area"]):
+        who = _person_in(f, s)
+        if who and who.get("name") and who["id"] not in seen:
+            named.append(s)
+            seen.add(who["id"])
+    use_names = len(named) >= 2
+    picks = P.take(named if use_names else f["portraits_static"], 3, 3.2, key="face_area", min_gap=20)
+    if not picks:
+        return None, ["no static single-person shots: the text would float"]
+    clips, sounds = [], []
+    for k, (s, p) in enumerate(picks):
+        who = _person_in(f, s) if use_names else None
+        text = _latin_name(who["name"]) if who else o["title"].upper()
+        size = _fit_size(text, 0.3)
+        L = p[1] - p[0]
+        c = clip(s, p, focus="auto", volume=0.5,
+                 effects=[{"type": "text_behind", "text": text, "start": 0.25, "end": round(L - 0.15, 2),
+                           "style": "text3d", "size": size, "pos": [0.5, 0.42], "anim": "flip_in"}])
+        if k:
+            c["transition"] = {"type": "fade", "duration": 0.3}
+        clips.append(c)
+        sounds.append({"sfx": "whoosh", "clip": k, "start": 0.15, "volume": 0.45})
+    card, credit = end_card(o["credit"])
+    clips.append(card)
+    edl = {"output": {"width": 1920, "height": 1080, "fps": 24, "fit": "crop"}, "grade": "trailer", "clips": clips,
+           "music": music_block(o["music"], 0.7), "sounds": sounds, "texts": [credit] if credit else []}
+    notes = [f"{len(picks)} titles behind people ({'their names' if use_names else 'the title'}); "
+             "renders about 0.7 s per frame of effect"]
+    if not use_names and f.get("people"):
+        notes.append("name the people (people.py --name) to put their names behind them")
+    if len(picks) < 3:
+        notes.append("few static single-person shots")
+    return edl, notes
+
+
+FX_CYCLE = [("particles", {"color": "#FFB25C", "count": 320}), ("hologram", {"pos": [0.74, 0.45], "scale": 0.8}),
+            ("streaks", {"colors": ["#7FD4FF", "#FFB36B"]}), ("grid", {"color": "#FF2BD6"})]
+
+
+def r_fx3d(f, P, o):
+    """Light effects (three.js) on dark, colourful shots, one accent per shot."""
+    from fx3d import available
+    why = available()
+    if why:
+        return None, [why]
+    picks = P.take(f["dark_neon"], 6, 2.4, key="colorfulness", min_gap=8,
+                   fallback=[s for s in f["all"] if s.get("brightness", 1) < 0.5])
+    if len(picks) < 3:
+        return None, ["not enough dark shots for light effects to read"]
+    clips, overlays = [], []
+    for k, (s, p) in enumerate(picks):
+        c = clip(s, p, focus="auto", volume=0.3)
+        if k:
+            c["transition"] = {"type": "fade", "duration": 0.25}
+        clips.append(c)
+        name, params = FX_CYCLE[k % len(FX_CYCLE)]
+        overlays.append({"fx": name, "clip": k, "start": 0.0, "fade": 0.3, "opacity": 0.9, "params": params})
+    last = len(clips) - 1
+    card, credit = end_card(o["credit"])
+    clips.append(card)
+    edl = {"output": {"width": 1920, "height": 1080, "fps": 24, "fit": "crop"}, "grade": "trailer", "clips": clips,
+           "overlays": overlays, "music": music_block(o["music"], 0.85),
+           "sounds": [{"sfx": "riser", "clip": 0, "start": 0.0, "volume": 0.4}],
+           "texts": [{"text": o["title"].upper(), "clip": 0, "start": 0.3, "end": 2.2, "style": "neon",
+                      "size": _fit_size(o["title"], 0.12, 0.7), "box": "#00000080"}] + ([credit] if credit else [])}
+    if o["music"]:
+        edl["beat_sync"] = {"music": 0, "every": 2, "shift": "auto", "clips": [0, last]}
+    return edl, [f"{len(picks)} shots, effects: " + ", ".join(ov["fx"] for ov in overlays)]
+
+
+def _densest_window(words, length):
+    """Start of the `length`-second window with the most spoken words."""
+    best, j = (0, words[0]["start"] if words else 0.0), 0
+    for i, w in enumerate(words):
+        while words[j]["start"] < w["start"] - length:
+            j += 1
+        if i - j + 1 > best[0]:
+            best = (i - j + 1, words[j]["start"])
+    return best[1]
+
+
+def r_talking(f, P, o):
+    """Talking-head jump cut: pauses and filler words removed, speech cleaned, captions from
+    the transcript, vertical with the speaker tracked."""
+    from draft_edl import is_filler, speech_spans_without_fillers
+    an = o.get("analysis") or {}
+    vids = [v for v in an.get("videos", []) if (v.get("transcript") or {}).get("segments")]
+    if not vids:
+        return None, ["needs a transcript of the speech (analyze.py transcribes it)"]
+    v = max(vids, key=lambda v: sum(len(s.get("words", [])) for s in v["transcript"]["segments"]))
+    words = [w for s in v["transcript"]["segments"] for w in s.get("words", [])
+             if not any(a <= w["start"] < b for vid, a, b in o.get("exclude", []) if vid in (None, v["id"]))]
+    if len(words) < 6:
+        return None, ["too little speech for a talking-head cut"]
+    notes, lo, hi = [], 0.0, v["duration"]
+    if f["speech_ratio"] < 0.4:  # not a talking-head recording: the densest dialogue minute
+        lo = _densest_window(words, 60.0)
+        hi = lo + 60.0
+        notes.append(f"footage is not mostly one person talking: cut from the densest dialogue minute "
+                     f"{fmt_ts(lo)}-{fmt_ts(hi)}")
+    words = [w for w in words if lo <= w["start"] < hi]
+    fillers = sum(1 for w in words if is_filler(w["word"]))
+    spans = speech_spans_without_fillers(words, pad=0.08, gap=0.35)
+    merged = []
+    for a, b in spans:
+        if merged and a - merged[-1][1] < 0.25:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    merged = [m for m in merged if m[1] - m[0] >= 0.45]
+    budget, clips = 90.0, []
+    for k, (a, b) in enumerate(merged):
+        if budget <= 0:
+            break
+        b = min(b, a + budget)
+        c = {"src": v["id"], "in": round(a, 3), "out": round(b, 3), "focus": "track"}
+        if k % 3 == 1:
+            c["effects"] = [{"type": "punch", "scale": 1.1}]
+        clips.append(c)
+        budget -= b - a
+    if not clips:
+        return None, ["no speech spans long enough to keep"]
+    card, credit = end_card(o["credit"], 2.0)
+    clips.append(card)
+    edl = {"output": {"width": 1080, "height": 1920, "fps": 30, "fit": "crop"}, "grade": "natural", "clips": clips,
+           "audio": {"voice": "clean"},
+           "music": music_block(o["music"], 0.12, duck=True),
+           "subtitles": {"enabled": True, "from": "transcript", "style": "explainer", "max_chars": 14},
+           "texts": [credit] if credit else []}
+    notes.append(f"{len(clips) - 1} speech pieces" + (f", {fillers} filler words cut" if fillers else
+                                                       "; analyse with --verbatim to also cut filler words"))
+    return edl, notes
+
+
 MOOD = {"trailer": "epic", "beatmix": "upbeat", "cast": "epic", "karaoke": "calm", "vhs": "retro",
-        "silent": "calm", "cyberpunk": "retro", "recap": "tense"}
+        "silent": "calm", "cyberpunk": "retro", "recap": "tense", "title3d": "epic", "text_behind": "calm",
+        "fx3d": "tense", "talking": "calm"}
 
 
 RECIPES = {"trailer": r_trailer, "beatmix": r_beatmix, "cast": r_cast, "karaoke": r_karaoke, "vhs": r_vhs,
            "silent": r_silent, "cyberpunk": r_cyberpunk,
-           "recap": r_recap}
+           "recap": r_recap, "title3d": r_title3d, "text_behind": r_text_behind, "fx3d": r_fx3d,
+           "talking": r_talking}
 ASPECT = {(1920, 1080): "16x9", (1080, 1920): "9x16", (1440, 1080): "4x3", (1080, 1080): "1x1"}
 
 
@@ -671,7 +883,7 @@ def main():
     script = ([ln.strip() for ln in Path(a.script).read_text(encoding="utf-8").splitlines() if ln.strip()]
               if a.script else [])
     o = {"music": music, "title": title, "credit": a.credit, "videos": an["videos"], "script": script,
-         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "brand": not a.no_brand, "caption_style": a.caption_style,
+         "voice": a.voice, "rate": a.rate, "tts_dir": auto_dir / ".render" / "tts", "analysis": an, "exclude": exclude, "brand": not a.no_brand, "caption_style": a.caption_style,
          "generate_music": not a.no_music, "music_len": 90.0, "emphasis_style": a.emphasis_style,
          "palette": load_brand(job)["colors"], "tts_config": load_tts_config(job)}
     auto_dir.mkdir(exist_ok=True)

@@ -123,8 +123,10 @@ python3 $S/render.py edits/demo/edl.json           # final
   with a 3D title
 - **Brand:** product signature on the end card, optional logo watermark, palette and font
   from `brand.json`
-- **Auto drafts:** one command cuts first drafts of several styles from the same footage,
-  renders and checks them, and lays them side by side for review
+- **Auto drafts:** one command cuts first drafts of all twelve menu styles (trailer, beat
+  mix, cast intros, karaoke, VHS, silent film, cyberpunk, recap, 3D title opener, text
+  behind people, light effects, talking-head jump cut), renders and checks them, and lays
+  them side by side for review
 
 Text is drawn with Pillow, so ffmpeg builds without `drawtext` or `libass` work.
 

@@ -152,6 +152,26 @@ def _node_env():
     return env
 
 
+def available() -> str | None:
+    """None when three.js effects can render here, else the reason (for recipes/menus)."""
+    import shutil
+    if not shutil.which("node"):
+        return "three.js effects need Node.js"
+    chk = subprocess.run(["node", "-e", "try{require.resolve('puppeteer-core')}catch(e){require.resolve('puppeteer')}"],
+                         capture_output=True, text=True, env=_node_env())
+    if chk.returncode != 0:
+        return "three.js effects need puppeteer or puppeteer-core (npm i -g puppeteer-core)"
+    chrome = os.environ.get("CHROME_PATH") or next((c for c in CHROME_CANDIDATES if Path(c).exists()), None)
+    if not chrome:
+        return "three.js effects need Chrome or Chromium (set CHROME_PATH)"
+    return None
+
+
+CHROME_CANDIDATES = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # same list as fx_render.js
+                     "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
+                     "C:/Program Files/Google/Chrome/Application/chrome.exe"]
+
+
 def _luma_key(frames_dir: Path, gain: float):
     """Black-background light effect -> RGBA whose normal 'over' compositing equals adding
     the light: alpha = brightest channel, colour = rgb / alpha (un-premultiplied)."""

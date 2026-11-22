@@ -97,8 +97,16 @@ python3 $S/autocut.py $J/work/analysis.json --styles trailer,beatmix,vhs [--excl
     [--music song.mp3 | --no-music] [--title "Name"] [--credit "attribution"] [--draft]
 ```
 
-`--styles` takes a list or `recommended` / `top3` / `all`. Recipes exist for `trailer`,
-`beatmix`, `cast`, `karaoke`, `vhs`, `silent`, `cyberpunk` and `recap`. Each recipe picks shots from the
+`--styles` takes a list or `recommended` / `top3` / `all`. Every style in the menu has a
+recipe: `trailer`, `beatmix`, `cast`, `karaoke`, `vhs`, `silent`, `cyberpunk`, `recap`,
+`title3d` (3D title on the calmest wide shot, then quick story shots), `text_behind` (named
+people's names between the background and the person; needs rembg, about 0.7 s per frame),
+`fx3d` (three.js particles, hologram, streaks, grid on dark shots; needs Node, puppeteer and
+Chrome) and `talking` (speech jump cut without pauses or filler words, `clean` voice preset,
+transcript captions, vertical with the speaker tracked; on footage that is not mostly one
+person talking it uses the densest dialogue minute). A recipe that lacks its footage or a
+dependency reports why in the report instead of failing the run. Exclude opening and
+closing credits with `--exclude`: text burned into the picture is not detected. Each recipe picks shots from the
 style features (every piece lies inside one detected shot, so no flash frames), writes
 `$J/auto/edl_<style>.json`, renders `$J/out/auto_<style>_<aspect>.mp4` with `--qa`, and
 the run ends with `$J/auto/report.md` (length, QA, notes per style) and

@@ -107,7 +107,7 @@ def test_picker_stays_inside_shots_and_never_overlaps():
 
 
 def test_choose_styles():
-    ranked = [{"key": "fx3d", "score": 90}, {"key": "trailer", "score": 80}, {"key": "vhs", "score": 50},
+    ranked = [{"key": "no_recipe", "score": 90}, {"key": "trailer", "score": 80}, {"key": "vhs", "score": 50},
               {"key": "silent", "score": 70}]
     assert autocut.choose("top2", ranked) == ["trailer", "vhs"]
     assert autocut.choose("recommended", ranked) == ["trailer", "silent"]
@@ -404,3 +404,83 @@ def test_split_length_is_the_shortest_item():
     c = {"type": "split", "items": [{"src": "v1", "in": 0, "out": 3}, {"src": "v1", "in": 5, "out": 7}]}
     assert render._clen_raw(c) == 2.0
     assert render._clen_raw({**c, "duration": 1.5}) == 1.5
+
+
+# ---------------------------------------------------------------- auto drafts: four more styles
+def _shot(t, dur=5.0, **k):
+    return {"vid": "v1", "start": t, "end": t + dur, "score": 0.5, "motion": 0.03, "sharpness": 5.0,
+            "colorfulness": 0.5, "brightness": 0.3, "faces": 1, "face_area": 0.05, **k}
+
+
+def _feat():
+    shots = [_shot(10.0 * i) for i in range(30)]
+    return {"all": shots, "establishing": [dict(s, faces=0) for s in shots[:3]], "action": shots[3:12],
+            "closeups": shots[12:18], "portraits_static": shots[18:24], "dark_neon": shots[20:30],
+            "speech_ratio": 0.8,
+            "people": [{"id": "P1", "name": "西莉亚  CELIA", "appearances": [{"vid": "v1", "t": 182.0, "area": 0.05}]},
+                       {"id": "P2", "name": "", "appearances": [{"vid": "v1", "t": 192.0, "area": 0.06}]},
+                       {"id": "P3", "name": "THOM", "appearances": [{"vid": "v1", "t": 202.0, "area": 0.04}]}]}
+
+
+def _opts(**k):
+    return {"title": "Steel", "credit": "", "music": None, **k}
+
+
+def test_title3d_recipe():
+    edl, notes = autocut.r_title3d(_feat(), autocut.Picker(), _opts())
+    assert edl["clips"][0]["src"] == "v1" and len(edl["clips"]) == 6
+    t = edl["texts"][0]
+    assert t["style"] == "text3d" and t["anim"] == "flip_in" and t["end"] > t["start"] + 2
+    assert notes == []
+
+
+def test_text_behind_recipe_uses_names(monkeypatch):
+    import importlib.util
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda n, *a: object() if n == "rembg" else real(n, *a))
+    edl, notes = autocut.r_text_behind(_feat(), autocut.Picker(), _opts())
+    texts = [c["effects"][0]["text"] for c in edl["clips"] if c.get("effects")]
+    assert sorted(texts) == ["CELIA", "THOM"]
+    assert all(c["effects"][0]["type"] == "text_behind" for c in edl["clips"] if c.get("effects"))
+
+
+def test_text_behind_without_rembg_names_the_reason(monkeypatch):
+    import importlib.util
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda n, *a: None if n == "rembg" else real(n, *a))
+    edl, notes = autocut.r_text_behind(_feat(), autocut.Picker(), _opts())
+    assert edl is None and "rembg" in notes[0]
+
+
+def test_fx3d_recipe_and_missing_dependency(monkeypatch):
+    import fx3d
+    monkeypatch.setattr(fx3d, "available", lambda: None)
+    edl, _ = autocut.r_fx3d(_feat(), autocut.Picker(), _opts())
+    assert [o["fx"] for o in edl["overlays"]][:4] == ["particles", "hologram", "streaks", "grid"]
+    monkeypatch.setattr(fx3d, "available", lambda: "three.js effects need Node.js")
+    edl, notes = autocut.r_fx3d(_feat(), autocut.Picker(), _opts())
+    assert edl is None and notes == ["three.js effects need Node.js"]
+
+
+def test_talking_recipe_cuts_fillers_and_pauses():
+    w = lambda a, b, t: {"start": a, "end": b, "word": t}  # noqa: E731
+    words = [w(0.5, 0.8, " Um,"), w(1.0, 1.3, " so"), w(1.35, 1.8, " today"), w(1.9, 2.1, " uh"),
+             w(2.3, 2.6, " we"), w(2.65, 3.1, " talk."), w(5.0, 5.4, " Next"), w(5.45, 5.9, " step"),
+             w(5.95, 6.4, " is"), w(6.45, 7.0, " editing.")]
+    an = {"videos": [{"id": "v1", "duration": 8.0, "transcript": {"segments": [{"words": words}]}}]}
+    edl, notes = autocut.r_talking(_feat(), autocut.Picker(), _opts(analysis=an))
+    pieces = [(c["in"], c["out"]) for c in edl["clips"] if c.get("src")]
+    assert pieces[0][0] >= 0.9 and all(not (a < 2.0 < b) for a, b in pieces)  # "Um" and "uh" gone
+    assert edl["audio"]["voice"] == "clean" and edl["subtitles"]["from"] == "transcript"
+    assert edl["output"]["height"] > edl["output"]["width"]
+    assert any("2 filler words cut" in n for n in notes)
+    edl, notes = autocut.r_talking(_feat(), autocut.Picker(), _opts(analysis={"videos": []}))
+    assert edl is None and "transcript" in notes[0]
+
+
+def test_every_menu_style_has_a_recipe():
+    import styles
+    from pathlib import Path
+    feats = styles.features({"videos": []}, Path("/nonexistent"))
+    menu = {s["key"] for s in styles.catalogue(feats)}
+    assert menu <= set(autocut.RECIPES)
